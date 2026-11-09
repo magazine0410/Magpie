@@ -1,0 +1,54 @@
+{
+    "language": "ZH-Hans",
+    "theme": 0,
+    "windowPos": {
+        "x": 100,
+        "y": 50,
+        "width": 1000,
+        "height": 700,
+        "maximized": true
+    },
+    "hotkeys": {
+        "scale": 577,
+        "overlay": 1658
+    },
+    "downCount": 4,
+    "alwaysRunAsElevated": true,
+    "showTrayIcon": false,
+    "scalingModes": [
+        {
+            "name": "Old mode",
+            "effects": [
+                {
+                    "name": "Lanczos",
+                    "scalingType": 1,
+                    "scale": {
+                        "x": 1,
+                        "y": 1
+                    }
+                }
+            ]
+        }
+    ],
+    "scalingProfiles": [
+        {
+            "scalingMode": 0,
+            "captureMode": 2,
+            "graphicsAdapter": 2,
+            "reserveTitleBar": true
+        },
+        {
+            "name": "Old game",
+            "packaged": false,
+            "pathRule": "C:\\Old\\game.exe",
+            "classNameRule": "GameWnd",
+            "autoScale": true,
+            "graphicsCard": 1,
+            "scalingMode": 0
+        }
+    ],
+    "overlay": {
+        "initialToolbarState": 1,
+        "screenshotsDir": "C:\\Shots"
+    }
+}

@@ -1,0 +1,233 @@
+{
+    "language": "ja",
+    "theme": 1,
+    "windowPos": {
+        "centerX": 960.0,
+        "centerY": 540.5,
+        "width": 980.0,
+        "height": 700.0,
+        "maximized": false
+    },
+    "shortcuts": {
+        "scale": 1658,
+        "windowedModeScale": 2391,
+        "toolbar": 3140,
+        "takeScreenshot": 0
+    },
+    "countdownSeconds": 5,
+    "developerMode": true,
+    "debugMode": false,
+    "benchmarkMode": false,
+    "disableTopmost": true,
+    "disableEffectCache": false,
+    "disableFontCache": true,
+    "saveEffectSources": false,
+    "warningsAreErrors": false,
+    "allowScalingMaximized": true,
+    "keepScreenOn": true,
+    "simulateExclusiveFullscreen": false,
+    "alwaysRunAsAdmin": true,
+    "showNotifyIcon": false,
+    "inlineParams": true,
+    "autoCheckForUpdates": false,
+    "checkForPreviewUpdates": true,
+    "updateCheckDate": 17624736000000000,
+    "duplicateFrameDetectionMode": 0,
+    "enableStatisticsForDynamicDetection": true,
+    "minFrameRate": 12.5,
+    "disableFP16": true,
+    "scalingModes": [
+        {
+            "name": "Lanczos",
+            "effects": [
+                {
+                    "name": "Lanczos",
+                    "scalingType": 1,
+                    "scale": {
+                        "x": 1.0,
+                        "y": 1.0
+                    }
+                }
+            ]
+        },
+        {
+            "name": "FSR",
+            "effects": [
+                {
+                    "name": "FSR\\FSR_EASU",
+                    "scalingType": 1,
+                    "scale": {
+                        "x": 1.0,
+                        "y": 1.0
+                    }
+                },
+                {
+                    "name": "FSR\\FSR_RCAS",
+                    "parameters": {
+                        "sharpness": 0.875
+                    }
+                }
+            ]
+        },
+        {
+            "name": "アニメ 2x",
+            "effects": [
+                {
+                    "name": "Anime4K\\Anime4K_Upscale_Denoise_L"
+                },
+                {
+                    "name": "Bicubic",
+                    "scalingType": 2,
+                    "scale": {
+                        "x": 1920.0,
+                        "y": 1080.0
+                    },
+                    "parameters": {
+                        "paramB": 0.25,
+                        "paramC": 0.5
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Empty"
+        }
+    ],
+    "profiles": [
+        {
+            "scalingMode": 0,
+            "captureMethod": 0,
+            "multiMonitorUsage": 0,
+            "initialWindowedScaleFactor": 0,
+            "customInitialWindowedScaleFactor": 1.25,
+            "fullscreenInitialToolbarState": 2,
+            "windowedInitialToolbarState": 2,
+            "screenshotsDir": "",
+            "screenshotFilenameTemplate": "",
+            "graphicsCardId": {
+                "idx": -1,
+                "vendorId": 0,
+                "deviceId": 0
+            },
+            "frameRateLimiterEnabled": false,
+            "maxFrameRate": 60.0,
+            "3DGameMode": false,
+            "captureTitleBar": false,
+            "adjustCursorSpeed": true,
+            "disableDirectFlip": false,
+            "cursorScaling": 2,
+            "customCursorScaling": 1.0,
+            "cursorInterpolationMode": 0,
+            "autoHideCursorEnabled": false,
+            "autoHideCursorDelay": 3.0,
+            "croppingEnabled": false,
+            "cropping": {
+                "left": 0.0,
+                "top": 0.0,
+                "right": 0.0,
+                "bottom": 0.0
+            },
+            "outputAlignment": 4
+        },
+        {
+            "name": "月姫",
+            "packaged": false,
+            "pathRule": "D:\\Games\\Tsukihime\\tsukihime.exe",
+            "classNameRule": "SDL_app",
+            "launcherPath": "D:\\Games\\Tsukihime\\launcher.lnk",
+            "autoScale": 1,
+            "launchParameters": "--window",
+            "scalingMode": 2,
+            "captureMethod": 1,
+            "multiMonitorUsage": 2,
+            "initialWindowedScaleFactor": 6,
+            "customInitialWindowedScaleFactor": 2.5,
+            "fullscreenInitialToolbarState": 0,
+            "windowedInitialToolbarState": 1,
+            "screenshotsDir": "D:\\Screenshots",
+            "screenshotFilenameTemplate": "%PN:20%_%Y%M%D",
+            "graphicsCardId": {
+                "idx": 1,
+                "vendorId": 4318,
+                "deviceId": 9988
+            },
+            "frameRateLimiterEnabled": true,
+            "maxFrameRate": 144.0,
+            "3DGameMode": true,
+            "captureTitleBar": true,
+            "adjustCursorSpeed": false,
+            "disableDirectFlip": true,
+            "cursorScaling": 7,
+            "customCursorScaling": 1.5,
+            "cursorInterpolationMode": 1,
+            "autoHideCursorEnabled": true,
+            "autoHideCursorDelay": 2.5,
+            "croppingEnabled": true,
+            "cropping": {
+                "left": 8.0,
+                "top": 31.0,
+                "right": 8.0,
+                "bottom": 8.0
+            },
+            "outputAlignment": 0
+        },
+        {
+            "name": "Calculator",
+            "packaged": true,
+            "pathRule": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+            "classNameRule": "ApplicationFrameWindow",
+            "launcherPath": "",
+            "autoScale": 2,
+            "launchParameters": "",
+            "scalingMode": -1,
+            "captureMethod": 3,
+            "multiMonitorUsage": 1,
+            "initialWindowedScaleFactor": 4,
+            "customInitialWindowedScaleFactor": 1.25,
+            "fullscreenInitialToolbarState": 2,
+            "windowedInitialToolbarState": 2,
+            "screenshotsDir": "",
+            "screenshotFilenameTemplate": "",
+            "graphicsCardId": {
+                "idx": -1,
+                "vendorId": 4098,
+                "deviceId": 5710
+            },
+            "frameRateLimiterEnabled": false,
+            "maxFrameRate": 60.0,
+            "3DGameMode": false,
+            "captureTitleBar": false,
+            "adjustCursorSpeed": true,
+            "disableDirectFlip": false,
+            "cursorScaling": 2,
+            "customCursorScaling": 1.0,
+            "cursorInterpolationMode": 0,
+            "autoHideCursorEnabled": false,
+            "autoHideCursorDelay": 3.0,
+            "croppingEnabled": false,
+            "cropping": {
+                "left": 0.0,
+                "top": 0.0,
+                "right": 0.0,
+                "bottom": 0.0
+            },
+            "outputAlignment": 8
+        }
+    ],
+    "overlay": {
+        "windows": {
+            "Profiler": {
+                "hArea": 2,
+                "vArea": 2,
+                "hPos": 16.0,
+                "vPos": 16.0
+            },
+            "Toolbar": {
+                "hArea": 1,
+                "vArea": 0,
+                "hPos": 0.5,
+                "vPos": 8.0
+            }
+        }
+    }
+}
