@@ -14,6 +14,18 @@ struct StrHelper {
 		return (bool)std::isspace(static_cast<unsigned char>(c));
 	}
 
+	static bool isalpha(char c) noexcept {
+		return (bool)std::isalpha(static_cast<unsigned char>(c));
+	}
+
+	static bool isdigit(char c) noexcept {
+		return (bool)std::isdigit(static_cast<unsigned char>(c));
+	}
+
+	static bool isalnum(char c) noexcept {
+		return (bool)std::isalnum(static_cast<unsigned char>(c));
+	}
+
 	static char toupper(char c) noexcept {
 		return (char)std::toupper(static_cast<unsigned char>(c));
 	}

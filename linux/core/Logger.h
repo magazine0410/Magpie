@@ -29,6 +29,9 @@ public:
 		size_t maxArchiveFiles
 	) noexcept;
 
+	// For command-line tools: log to the given sink instead of a file.
+	bool InitializeWithSink(spdlog::level::level_enum logLevel, spdlog::sink_ptr sink) noexcept;
+
 	void SetLevel(spdlog::level::level_enum logLevel) noexcept;
 
 	void Flush() noexcept {

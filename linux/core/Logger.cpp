@@ -18,8 +18,16 @@ bool Logger::Initialize(
 	size_t maxArchiveFiles
 ) noexcept {
 	try {
-		auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-			logFile.string(), archiveAboveSize, maxArchiveFiles);
+		return InitializeWithSink(logLevel, std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+			logFile.string(), archiveAboveSize, maxArchiveFiles));
+	} catch (const std::exception&) {
+		_logger.reset();
+		return false;
+	}
+}
+
+bool Logger::InitializeWithSink(spdlog::level::level_enum logLevel, spdlog::sink_ptr sink) noexcept {
+	try {
 		_logger = std::make_shared<spdlog::logger>(LOGGER_NAME, std::move(sink));
 		_logger->set_level(logLevel);
 		_logger->set_pattern("%Y-%m-%d %H:%M:%S.%e|%l|%s:%#|%!|%v");
