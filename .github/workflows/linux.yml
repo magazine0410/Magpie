@@ -32,15 +32,23 @@ jobs:
         run: >
           dnf -y install
           git gcc-c++ cmake ninja-build
-          fmt-devel spdlog-devel rapidjson-devel catch-devel
+          fmt-devel spdlog-devel rapidjson-devel catch-devel vulkan-headers
 
       - uses: actions/checkout@v4
 
+      # Downloads the pinned DirectX Shader Compiler release (see linux/cmake/Dxc.cmake).
       - name: Configure
         run: cmake -S linux -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
       - name: Build
         run: cmake --build build
 
+      # The test labelled "slow" compiles every effect in six combinations.
+      # The compiler is the same binary in both build types, so once is enough.
       - name: Test
+        if: matrix.build_type == 'RelWithDebInfo'
         run: ctest --test-dir build --output-on-failure
+
+      - name: Test (without the full effect matrix)
+        if: matrix.build_type == 'Debug'
+        run: ctest --test-dir build --output-on-failure -LE slow
