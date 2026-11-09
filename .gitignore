@@ -432,3 +432,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Linux port: working documents that stay local
+/LINUX_PORT_PLAN.md
+/linux/spikes/RESULTS.md
