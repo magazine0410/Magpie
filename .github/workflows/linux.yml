@@ -1,0 +1,46 @@
+name: linux
+permissions:
+  contents: read
+
+on:
+  push:
+    paths:
+      [
+        '.github/workflows/linux.yml',
+        'linux/**',
+        'src/Effects/**',
+      ]
+  pull_request:
+    paths:
+      [
+        '.github/workflows/linux.yml',
+        'linux/**',
+        'src/Effects/**',
+      ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The Linux port is developed on Fedora and uses its package versions.
+    container: fedora:44
+    strategy:
+      matrix:
+        build_type: ['RelWithDebInfo', 'Debug']
+
+    steps:
+      - name: Install dependencies
+        run: >
+          dnf -y install
+          git gcc-c++ cmake ninja-build
+          fmt-devel spdlog-devel rapidjson-devel catch-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S linux -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
