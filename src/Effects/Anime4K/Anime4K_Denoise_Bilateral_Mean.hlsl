@@ -38,7 +38,10 @@ SamplerState sam;
 
 #define INTENSITY_POWER_CURVE 1.0 //Intensity window power curve. Setting it to 0 will make the intensity window treat all intensities equally, while increasing it will make the window narrower in darker intensities and wider in brighter intensities.
 
-#define KERNELSIZE (max(uint(ceil(SPATIAL_SIGMA * 2.0)), 1) * 2 + 1) //Kernel size, must be an positive odd integer.
+// Value of (max(uint(ceil(SPATIAL_SIGMA * 2.0)), 1) * 2 + 1). Written as a number because it is used
+// as an array size and DXC, unlike FXC, does not evaluate intrinsic functions in constant expressions.
+// Update it when SPATIAL_SIGMA changes.
+#define KERNELSIZE 5u //Kernel size, must be an positive odd integer.
 #define KERNELHALFSIZE (uint(KERNELSIZE/2)) //Half of the kernel size without remainder. Must be equal to trunc(KERNELSIZE/2).
 #define KERNELLEN (KERNELSIZE * KERNELSIZE) //Total area of kernel. Must be equal to KERNELSIZE * KERNELSIZE.
 
