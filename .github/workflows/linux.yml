@@ -35,7 +35,7 @@ jobs:
           fmt-devel spdlog-devel rapidjson-devel catch-devel
           vulkan-headers vulkan-loader-devel muParser-devel libpng-devel
           wayland-devel wayland-protocols-devel
-          pipewire-devel systemd-devel plasma-wayland-protocols-devel
+          pipewire-devel systemd-devel plasma-wayland-protocols-devel wlr-protocols-devel
           mesa-vulkan-drivers vulkan-validation-layers
 
       - uses: actions/checkout@v4
