@@ -20,6 +20,18 @@ struct Paths {
 
 	// The directory "logs" in StateDir.
 	static std::filesystem::path LogsDir() noexcept;
+
+	// The directory "Screenshots" in the user's pictures directory, which is
+	// XDG_PICTURES_DIR of user-dirs.dirs or ~/Pictures. Counterpart of the
+	// Screenshots folder of Windows.
+	static std::filesystem::path SystemScreenshotsDir() noexcept;
+
+	// Where screenshots go for a profile that names `configured`: the system
+	// directory if it is empty, below the working directory if it is
+	// relative, as Profile::GetScreenshotsDir does on Windows. A Windows path
+	// from a configuration made there means nothing here and also gives the
+	// system directory.
+	static std::filesystem::path ScreenshotsDir(const std::filesystem::path& configured) noexcept;
 };
 
 }

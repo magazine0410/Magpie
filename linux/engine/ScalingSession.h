@@ -11,8 +11,10 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 #include <vulkan/vulkan.h>
 #include "Bridge.h"
@@ -83,21 +85,35 @@ public:
 		// The monitor that shows the scaled picture, and the other real ones
 		OutputInfo monitor;
 		std::vector<OutputInfo> otherMonitors;
-		// Width of the strip on each side through which the pointer leaves to
-		// another monitor; zero where the monitor has no neighbour
+		// The sides on which the monitor has a neighbour that the pointer
+		// can leave to
+		bool exitLeft = false, exitTop = false, exitRight = false, exitBottom = false;
+		// Width of the strip around the source through which the pointer
+		// leaves; zero on sides without a neighbour, and on all sides for a
+		// source that fills its output
 		int32_t ringLeft = 0, ringTop = 0, ringRight = 0, ringBottom = 0;
 		// Columns on the right that only make the width a multiple of 8
 		int32_t padRight = 0;
 		Size size;
 		Point position;
+		// The source window on the virtual output, relative to that output
+		Rect sourceRect;
+		// Where the pointer acts on the source and is left alone. This is
+		// the source, without its outermost pixels on the sides with a
+		// neighbour if it fills the output: there they serve as the strip.
+		Rect pointerRect;
 	};
 
-	// Decides that for a window with this frame and this size of its
-	// content, on a desktop with these outputs. Returns false if the window
-	// is on no monitor or there is no room for the virtual output.
+	// Decides that for a window with this frame that will be `sourceSize`
+	// large on the virtual output, on a desktop with these outputs.
+	// `fillsOutput`: the window is maximized or fullscreen and takes the size
+	// of its output, so the output gets the size of the source and no strip.
+	// Returns false if the window is on no monitor or there is no room for
+	// the virtual output.
 	static bool PlanVirtualOutput(
 		const Rect& frameRect,
 		Size sourceSize,
+		bool fillsOutput,
 		std::span<const OutputInfo> outputs,
 		VirtualOutputPlan& plan
 	) noexcept;
@@ -123,6 +139,13 @@ public:
 
 	// Puts the source window and the pointer back and frees everything
 	void Stop() noexcept;
+
+	// Saves what an effect of the chain drew last, without cursor, as a PNG
+	// file in the screenshots directory of the options. `effectIndex` counts
+	// the active effects; without it the last one is taken, which is the
+	// scaled picture. The file is written in the background and the outcome
+	// goes to the log. Returns false if no picture could be taken.
+	bool TakeScreenshot(std::optional<uint32_t> effectIndex = std::nullopt) noexcept;
 
 	bool IsRunning() const noexcept {
 		return _isRunning;
@@ -190,6 +213,10 @@ private:
 	int32_t _padRight = 0;
 	// The source window on the virtual output, relative to that output
 	Rect _sourceRect;
+	// Where the pointer is left alone, see VirtualOutputPlan
+	Rect _pointerRect;
+	// The source was maximized or fullscreen and is so on the virtual output
+	bool _isSourceFilling = false;
 
 	// Keeping the screen on and notifications away, if the options ask for it
 	std::unique_ptr<SessionInhibitor> _inhibitor;
@@ -204,8 +231,10 @@ private:
 
 	// What the chain was last sized for
 	std::shared_ptr<Texture> _chainInput;
-	// The cursor as it was last drawn
+	// The cursor as it is to be drawn, and as it was last drawn
+	CaptureCursorState _cursor;
 	CaptureCursorState _drawnCursor;
+	CursorAutoHide _cursorAutoHide;
 	uint32_t _loadedCursorImage = 0;
 	// The pointer position for which the pointer was last moved, so that one
 	// position is acted on once
@@ -216,6 +245,9 @@ private:
 	// the speed is not to be adjusted
 	std::vector<KWinPointerSpeed::Device> _pointerDevices;
 	bool _isPointerSlowed = false;
+
+	// Writes the last screenshot to its file
+	std::jthread _screenshotThread;
 
 	StepTimerStatus _stepStatus = StepTimerStatus::WaitingForNewFrame;
 	bool _hasNewFrame = false;

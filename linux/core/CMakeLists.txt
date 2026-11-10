@@ -2,8 +2,10 @@
 add_library(magpie_core STATIC
 	Logger.cpp
 	Paths.cpp
+	ProcessInfo.cpp
 	ProfileOptions.cpp
 	ScalingOptions.cpp
+	ScreenshotFilenameTemplateHelper.cpp
 	Settings.cpp
 	SettingsJson.cpp
 	SettingsStore.cpp

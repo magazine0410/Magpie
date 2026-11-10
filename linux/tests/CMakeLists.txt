@@ -5,6 +5,7 @@ add_executable(magpie_tests
 	TestPaths.cpp
 	TestProfileOptions.cpp
 	TestScalingOptions.cpp
+	TestScreenshotFilename.cpp
 	TestSettingsJson.cpp
 	TestSettingsStore.cpp
 	TestShaderCompiler.cpp
@@ -30,6 +31,7 @@ add_executable(magpie_render_tests
 	TestDuplicateFrames.cpp
 	TestRenderBasics.cpp
 	TestRenderer.cpp
+	TestScreenshot.cpp
 	TestStepTimer.cpp
 )
 

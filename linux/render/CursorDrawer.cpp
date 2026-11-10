@@ -86,6 +86,30 @@ static VkShaderModule CreateShaderModule(
 	return module;
 }
 
+bool CursorAutoHide::Update(bool isVisible, Point pos, uint32_t imageSerial, Clock::time_point now) noexcept {
+	_hideTime.reset();
+	if (!isVisible) {
+		return false;
+	}
+	if (!_delay) {
+		return true;
+	}
+
+	if (pos != _lastPos || imageSerial != _lastImageSerial) {
+		_lastPos = pos;
+		_lastImageSerial = imageSerial;
+		_lastActiveTime = now;
+	}
+
+	const Clock::time_point hideTime = _lastActiveTime +
+		std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(*_delay));
+	if (now > hideTime) {
+		return false;
+	}
+	_hideTime = hideTime;
+	return true;
+}
+
 bool CursorDrawer::Initialize(VulkanDevice& vulkanDevice, VkFormat targetFormat) noexcept {
 	_device = &vulkanDevice;
 	const VkDevice device = vulkanDevice.Device();

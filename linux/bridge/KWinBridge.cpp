@@ -640,7 +640,10 @@ bool KWinBridge::_RunScript(const std::string& script) noexcept {
 
 bool KWinBridge::PlaceWindow(const std::string& windowId, const Placement& placement) noexcept {
 	const Rect& rect = placement.frameRect;
-	// The id is a UUID in braces; nothing in it needs escaping
+	const bool toOutput = !placement.output.empty();
+	const bool setGeometry = placement.setGeometry && !toOutput;
+	// The id is a UUID in braces and the name of an output has no quotation
+	// marks; nothing in them needs escaping
 	const std::string script = fmt::format(R"(
 for (const w of workspace.windowList()) {{
 	if (w.internalId.toString() === "{}") {{
@@ -648,19 +651,25 @@ for (const w of workspace.windowList()) {{
 		if ({}) {{
 			w.frameGeometry = {{ x: {}, y: {}, width: {}, height: {} }};
 		}}
+		for (const screen of workspace.screens) {{
+			if (screen.name === "{}") {{
+				workspace.sendClientToScreen(w, screen);
+			}}
+		}}
 		if ({}) {{
 			workspace.activeWindow = w;
 		}}
 	}}
 }}
-)", windowId, placement.noBorder ? "true" : "false", placement.setGeometry ? "true" : "false",
-		rect.left, rect.top, rect.Width(), rect.Height(), placement.activate ? "true" : "false");
+)", windowId, placement.noBorder ? "true" : "false", setGeometry ? "true" : "false",
+		rect.left, rect.top, rect.Width(), rect.Height(), placement.output, placement.activate ? "true" : "false");
 
 	if (!_RunScript(script)) {
 		return false;
 	}
 
 	// Wait until the window is reported where it should be
+	const bool waitForRect = setGeometry || (toOutput && rect.Width() > 0);
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
 	while (true) {
 		if (wl_display_roundtrip(_connection->display) < 0) {
@@ -672,7 +681,7 @@ for (const w of workspace.windowList()) {{
 			Logger::Get().Error("The window to place does not exist");
 			return false;
 		}
-		if ((!placement.setGeometry || window->info.frameRect == rect) &&
+		if ((!waitForRect || window->info.frameRect == rect) &&
 			window->info.hasNoBorder == placement.noBorder &&
 			(!placement.activate || window->info.isActive)) {
 			return true;

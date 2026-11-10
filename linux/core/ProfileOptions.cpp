@@ -1,5 +1,6 @@
 #include "ProfileOptions.h"
 #include <algorithm>
+#include "Paths.h"
 
 namespace Magpie {
 
@@ -67,7 +68,7 @@ ScalingError BuildScalingOptions(
 
 	options.fullscreenInitialToolbarState = profile.fullscreenInitialToolbarState;
 	options.windowedInitialToolbarState = profile.windowedInitialToolbarState;
-	options.screenshotsDir = profile.screenshotsDir;
+	options.screenshotsDir = Paths::ScreenshotsDir(profile.screenshotsDir);
 	options.screenshotFilenameTemplate = profile.screenshotFilenameTemplate;
 
 	if (profile.isCroppingEnabled) {

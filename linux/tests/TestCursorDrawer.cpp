@@ -154,6 +154,42 @@ const Rect WHOLE_TARGET{ 0, 0, TARGET_WIDTH, TARGET_HEIGHT };
 
 }
 
+TEST_CASE("A resting cursor is hidden after the delay", "[cursor]") {
+	using namespace std::chrono_literals;
+	const CursorAutoHide::Clock::time_point start = CursorAutoHide::Clock::now();
+	CursorAutoHide autoHide;
+
+	SECTION("without a delay it stays") {
+		CHECK(autoHide.Update(true, { 10, 10 }, 1, start));
+		CHECK(autoHide.Update(true, { 10, 10 }, 1, start + 1h));
+		CHECK_FALSE(autoHide.HideTime());
+		CHECK_FALSE(autoHide.Update(false, { 10, 10 }, 1, start + 1h));
+	}
+
+	SECTION("with a delay") {
+		autoHide.SetDelay(2.0f);
+		CHECK(autoHide.Update(true, { 10, 10 }, 1, start));
+		REQUIRE(autoHide.HideTime());
+		CHECK(*autoHide.HideTime() == start + 2s);
+		CHECK(autoHide.Update(true, { 10, 10 }, 1, start + 1900ms));
+		CHECK_FALSE(autoHide.Update(true, { 10, 10 }, 1, start + 2100ms));
+		CHECK_FALSE(autoHide.HideTime());
+
+		// Movement shows it again and starts the time anew
+		CHECK(autoHide.Update(true, { 11, 10 }, 1, start + 3s));
+		CHECK(*autoHide.HideTime() == start + 5s);
+		CHECK_FALSE(autoHide.Update(true, { 11, 10 }, 1, start + 6s));
+		// So does another image
+		CHECK(autoHide.Update(true, { 11, 10 }, 2, start + 7s));
+
+		// A cursor that the source hides and shows again at the same place
+		// stays hidden
+		CHECK_FALSE(autoHide.Update(true, { 11, 10 }, 2, start + 10s));
+		CHECK_FALSE(autoHide.Update(false, { 11, 10 }, 2, start + 11s));
+		CHECK_FALSE(autoHide.Update(true, { 11, 10 }, 2, start + 12s));
+	}
+}
+
 TEST_CASE("The cursor rectangle follows the Windows rules", "[cursor]") {
 	// Scale 1: the hot spot is at the cursor position
 	CHECK(CursorDrawer::CalcCursorRect({ 100, 50 }, { 32, 32 }, { 4, 6 }, 1.0f) == Rect{ 96, 44, 128, 76 });

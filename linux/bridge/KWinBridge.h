@@ -27,6 +27,10 @@ public:
 		// False: only the decoration and the activation are changed, for a
 		// window whose place the desktop decides (maximized, fullscreen)
 		bool setGeometry = true;
+		// Not empty: the window is sent to this output and keeps its state,
+		// for a maximized or fullscreen window. frameRect is then where it
+		// is expected to end up, or empty if that is not known.
+		std::string output;
 	};
 
 	KWinBridge() noexcept;

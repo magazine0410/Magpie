@@ -4,11 +4,12 @@
 // The Windows class reads the cursor from the system and knows three kinds:
 // colour, monochrome and masked colour, the last two with pixels that invert
 // the screen. A screen cast delivers every cursor as a colour image with
-// alpha, so only that kind exists here. Hiding the cursor after a time
-// without movement is not ported yet.
+// alpha, so only that kind exists here.
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vulkan/vulkan.h>
 #include "Geometry.h"
@@ -18,6 +19,37 @@ namespace Magpie {
 
 struct Texture;
 class VulkanDevice;
+
+// Hides the cursor after a time without movement, as the check for
+// autoHideCursorDelay in CursorDrawer::_GetCursorState does on Windows.
+class CursorAutoHide {
+public:
+	using Clock = std::chrono::steady_clock;
+
+	// In seconds; without a value the cursor is never hidden
+	void SetDelay(std::optional<float> delay) noexcept {
+		_delay = delay;
+	}
+
+	// Whether the cursor is to be drawn at `now`. `isVisible`: the source
+	// shows a cursor and the pointer acts on the source. A cursor that the
+	// source hides and shows again without moving it stays hidden; movement
+	// and another image show it.
+	bool Update(bool isVisible, Point pos, uint32_t imageSerial, Clock::time_point now) noexcept;
+
+	// When the cursor that the last Update let through will be hidden if
+	// nothing changes
+	std::optional<Clock::time_point> HideTime() const noexcept {
+		return _hideTime;
+	}
+
+private:
+	std::optional<float> _delay;
+	Point _lastPos{ -1, -1 };
+	uint32_t _lastImageSerial = 0;
+	Clock::time_point _lastActiveTime;
+	std::optional<Clock::time_point> _hideTime;
+};
 
 class CursorDrawer {
 public:

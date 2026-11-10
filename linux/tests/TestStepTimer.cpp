@@ -110,6 +110,32 @@ TEST_CASE("A wake descriptor ends the wait for a new frame", "[render]") {
 	CHECK(waited < 2s);
 }
 
+TEST_CASE("A wake time ends the wait for a new frame", "[render]") {
+	Pipe wake;
+	StepTimer timer;
+	timer.Initialize(0.1f, std::nullopt);
+	timer.SetWakeDescriptors(wake.fds);
+
+	wake.Signal();
+	bool fpsUpdated;
+	timer.WaitForNextFrame(true, fpsUpdated);
+	wake.Drain();
+	timer.PrepareForRender();
+
+	// Nothing signals the descriptor
+	const auto start = steady_clock::now();
+	timer.SetWakeTime(start + 30ms);
+	CHECK(timer.WaitForNextFrame(true, fpsUpdated) == StepTimerStatus::WaitingForNewFrame);
+	const auto waited = steady_clock::now() - start;
+	CHECK(waited >= 25ms);
+	CHECK(waited < 2s);
+
+	// A wake time in the past does not block
+	const auto second = steady_clock::now();
+	timer.WaitForNextFrame(true, fpsUpdated);
+	CHECK(steady_clock::now() - second < 20ms);
+}
+
 TEST_CASE("Without wake descriptors the first wait returns at once", "[render]") {
 	StepTimer timer;
 	timer.Initialize(0.0f, std::nullopt);

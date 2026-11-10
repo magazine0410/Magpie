@@ -1,4 +1,5 @@
 #include "StepTimer.h"
+#include <algorithm>
 #include <cassert>
 #include <ctime>
 #include <poll.h>
@@ -105,6 +106,13 @@ void StepTimer::PrepareForRender() noexcept {
 }
 
 void StepTimer::_WaitForWake(nanoseconds time) noexcept {
+	if (_wakeTime) {
+		const nanoseconds untilWakeTime = std::max(*_wakeTime - steady_clock::now(), nanoseconds(0));
+		if (time < 0ns || untilWakeTime < time) {
+			time = untilWakeTime;
+		}
+	}
+
 	if (_wakeFds.empty() && time < 0ns) {
 		// Nothing could end the wait
 		return;

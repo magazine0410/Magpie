@@ -44,13 +44,10 @@ void ScalingOptions::Prepare() noexcept {
 	assert(cursorScaleFactor >= 0);
 	assert(!autoHideCursorDelay.has_value() || *autoHideCursorDelay > 0);
 	assert(initialWindowedScaleFactor >= 0);
-	assert(!overlayOptions.scaleShortcut.empty());
-	assert(!overlayOptions.windowedModeScaleShortcut.empty());
-	assert(!overlayOptions.takeScreenshotShortcut.empty());
-
-	// GDI and DwmSharedSurface cannot capture the title bar
-	IsCaptureTitleBar(IsCaptureTitleBar() &&
-		captureMethod != CaptureMethod::GDI && captureMethod != CaptureMethod::DwmSharedSurface);
+	// Unlike on Windows the shortcut texts of the overlay may be empty: the
+	// desktop assigns the keys, and a tool without shortcuts has none. Nor
+	// does the capture method switch off "capture title bar", because the
+	// Windows capture methods do not exist here.
 
 	if (IsWindowedMode()) {
 		IsAllowScalingMaximized(false);

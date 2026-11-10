@@ -13,6 +13,7 @@
 #include <sys/timerfd.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 #include <spdlog/sinks/stdout_sinks.h>
 #include "KWinBridge.h"
 #include "Logger.h"
@@ -39,6 +40,9 @@ static void PrintUsage() {
 		"  --delay N          wait N seconds before starting, to give time to\n"
 		"                     activate the window\n"
 		"  --crop L,T,R,B     remove this many pixels from the edges of the source\n"
+		"  --title-bar        keep the title bar that the desktop draws; it is part\n"
+		"                     of the picture then\n"
+		"  --allow-maximized  also scale a maximized or fullscreen window\n"
 		"\n"
 		"Effects:\n"
 		"  --effect SPEC      add an effect; may be given several times. Without\n"
@@ -53,6 +57,7 @@ static void PrintUsage() {
 		"  --cursor-scale F   size of the cursor relative to its own (default 1); 0\n"
 		"                     scales it like the source\n"
 		"  --cursor-bilinear  interpolate the scaled cursor\n"
+		"  --hide-cursor N    hide the cursor after N seconds without movement\n"
 		"  --adjust-cursor-speed  slow the pointer down by the scale of the picture\n"
 		"                     while it is on the picture. This changes the speed\n"
 		"                     setting of the pointer devices and restores it afterwards.\n"
@@ -61,11 +66,18 @@ static void PrintUsage() {
 		"  --present-mode M   mailbox (default), fifo or immediate\n"
 		"  --max-fps N        frame rate limit\n"
 		"  --min-fps N        frames are repeated to keep this rate\n"
+		"  --benchmark        render without waiting for new frames of the source\n"
 		"  --validate         use the Vulkan validation layers\n"
 		"\n"
 		"Desktop:\n"
 		"  --keep-screen-on   ask the desktop not to blank the screen while scaling\n"
 		"  --quiet            ask the desktop to hold back notifications while scaling\n"
+		"\n"
+		"Screenshots:\n"
+		"  --screenshot-at N  save the scaled picture N seconds after the start\n"
+		"  --screenshots-dir DIR  where to (default: Screenshots in the pictures\n"
+		"                     directory)\n"
+		"  --screenshot-name TEMPLATE  file name template (default: %PN:20%)\n"
 		"\n"
 		"Run:\n"
 		"  --seconds N        end after N seconds\n"
@@ -123,7 +135,9 @@ int main(int argc, char* argv[]) {
 	bool useActive = false;
 	float delay = 0.0f;
 	float seconds = 0.0f;
+	float screenshotAt = 0.0f;
 	bool verbose = false;
+	options.screenshotsDir = Paths::ScreenshotsDir({});
 
 	for (int i = 1; i < argc; ++i) {
 		const std::string_view arg = argv[i];
@@ -159,6 +173,19 @@ int main(int argc, char* argv[]) {
 			if (!ParseCropping(text, options.cropping)) {
 				invalid(text);
 			}
+		} else if (arg == "--title-bar") {
+			options.IsCaptureTitleBar(true);
+		} else if (arg == "--allow-maximized") {
+			options.IsAllowScalingMaximized(true);
+		} else if (arg == "--hide-cursor") {
+			const char* text = value();
+			float delay = 0.0f;
+			if (!ParseFloat(text, delay) || delay <= 0) {
+				invalid(text);
+			}
+			options.autoHideCursorDelay = delay;
+		} else if (arg == "--benchmark") {
+			options.IsBenchmarkMode(true);
 		} else if (arg == "--effect") {
 			const char* spec = value();
 			if (!ParseEffectSpec(spec, options.effects.emplace_back())) {
@@ -204,6 +231,12 @@ int main(int argc, char* argv[]) {
 			options.IsKeepScreenOn(true);
 		} else if (arg == "--quiet") {
 			options.IsSimulateExclusiveFullscreen(true);
+		} else if (arg == "--screenshot-at") {
+			screenshotAt = number(0.0f);
+		} else if (arg == "--screenshots-dir") {
+			options.screenshotsDir = Paths::ScreenshotsDir(value());
+		} else if (arg == "--screenshot-name") {
+			options.screenshotFilenameTemplate = value();
 		} else if (arg == "--seconds") {
 			seconds = number(0.0f);
 		} else if (arg == "-v") {
@@ -275,16 +308,22 @@ int main(int argc, char* argv[]) {
 	std::printf("Scaling %s\n", session.Describe().c_str());
 	std::fflush(stdout);
 
-	int timerFd = -1;
-	if (seconds > 0) {
-		timerFd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-		const long long nanoseconds = (long long)(seconds * 1e9);
+	const auto makeTimer = [](float time) {
+		const int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+		const long long nanoseconds = (long long)(time * 1e9);
 		const itimerspec spec{ {}, { nanoseconds / 1'000'000'000, nanoseconds % 1'000'000'000 } };
-		timerfd_settime(timerFd, 0, &spec, nullptr);
-	}
+		timerfd_settime(fd, 0, &spec, nullptr);
+		return fd;
+	};
+	const int timerFd = seconds > 0 ? makeTimer(seconds) : -1;
+	const int screenshotFd = screenshotAt > 0 ? makeTimer(screenshotAt) : -1;
 
-	const int wakeFds[2]{ signalFd, timerFd };
-	const std::span<const int> wake(wakeFds, timerFd >= 0 ? 2 : 1);
+	std::vector<int> wake{ signalFd };
+	for (const int fd : { timerFd, screenshotFd }) {
+		if (fd >= 0) {
+			wake.push_back(fd);
+		}
+	}
 	const auto start = std::chrono::steady_clock::now();
 
 	const char* endText = nullptr;
@@ -298,6 +337,9 @@ int main(int argc, char* argv[]) {
 		if (timerFd >= 0 && read(timerFd, &expirations, sizeof(expirations)) == sizeof(expirations)) {
 			endText = "the time is up";
 			break;
+		}
+		if (screenshotFd >= 0 && read(screenshotFd, &expirations, sizeof(expirations)) == sizeof(expirations)) {
+			session.TakeScreenshot();
 		}
 	}
 	if (!endText) {

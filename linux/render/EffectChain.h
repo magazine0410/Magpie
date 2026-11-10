@@ -60,6 +60,11 @@ public:
 		return _effectDrawers.back()->GetOutputTexture();
 	}
 
+	// What effect number `index` of ActiveEffectDescs drew last
+	const std::shared_ptr<Texture>& EffectOutput(size_t index) const noexcept {
+		return _effectDrawers[index]->GetOutputTexture();
+	}
+
 	// The effects that are drawn, including an appended Bicubic
 	const std::vector<const EffectDesc*>& ActiveEffectDescs() const noexcept {
 		return _activeEffectDescs;

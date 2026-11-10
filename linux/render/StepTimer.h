@@ -33,6 +33,12 @@ public:
 	// The caller reads from them after WaitForNextFrame returns.
 	void SetWakeDescriptors(std::span<const int> fds) noexcept;
 
+	// A moment at which a wait for a wake-up ends at the latest, for work
+	// that is due at a known time; none by default
+	void SetWakeTime(std::optional<std::chrono::steady_clock::time_point> time) noexcept {
+		_wakeTime = time;
+	}
+
 	// With waitForWake the call blocks until a descriptor is readable or the
 	// time for a forced frame has come; otherwise it only applies the frame
 	// rate limit.
@@ -62,6 +68,7 @@ private:
 	std::chrono::nanoseconds _minInterval{};
 	std::chrono::nanoseconds _maxInterval{ std::numeric_limits<std::chrono::nanoseconds::rep>::max() };
 	std::vector<int> _wakeFds;
+	std::optional<std::chrono::steady_clock::time_point> _wakeTime;
 
 	std::chrono::steady_clock::time_point _thisFrameStartTime;
 	std::chrono::steady_clock::time_point _nextFrameStartTime;
