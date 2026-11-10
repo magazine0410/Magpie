@@ -1,0 +1,8 @@
+PageFrame 1.0 PageFrame.qml
+SettingsGroup 1.0 SettingsGroup.qml
+SettingsCard 1.0 SettingsCard.qml
+SettingsExpander 1.0 SettingsExpander.qml
+ExpanderItem 1.0 ExpanderItem.qml
+InfoBar 1.0 InfoBar.qml
+ShortcutView 1.0 ShortcutView.qml
+NumberField 1.0 NumberField.qml

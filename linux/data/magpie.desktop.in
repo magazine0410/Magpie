@@ -2,9 +2,9 @@
 Type=Application
 Name=Magpie
 Comment=Scales windows with a choice of scaling algorithms
-Exec=$<TARGET_FILE:magpie-engine>
+Exec=$<TARGET_FILE:magpie>
+Icon=$<TARGET_PROPERTY:magpie,MAGPIE_ICON_FILE>
 Terminal=false
-NoDisplay=true
 Categories=Utility;
 # KWin interfaces the program uses, for KWin builds that only offer them to
 # programs that name them here

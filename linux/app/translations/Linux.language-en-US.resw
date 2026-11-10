@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Texts that only the Linux application has. Same format as the files of the
+  Windows user interface (src/Magpie/Resources.language-*.resw), so that
+  translations can be added as Linux.language-<tag>.resw.
+-->
+<root>
+  <data name="Linux_SystemDefault" xml:space="preserve">
+    <value>System default</value>
+  </data>
+  <data name="Linux_Shortcut_None" xml:space="preserve">
+    <value>No key assigned</value>
+  </data>
+  <data name="Linux_Shortcut_Change" xml:space="preserve">
+    <value>Change…</value>
+  </data>
+  <data name="Linux_Shortcut_ChangeToolTip" xml:space="preserve">
+    <value>Opens the shortcut settings of the desktop</value>
+  </data>
+  <data name="Linux_Shortcut_Unavailable" xml:space="preserve">
+    <value>Not available</value>
+  </data>
+  <data name="Linux_Settings.Title" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="Linux_Settings_ConfigLocation.Header" xml:space="preserve">
+    <value>Configuration file</value>
+  </data>
+  <data name="Linux_Engine_Failed.Title" xml:space="preserve">
+    <value>Scaling is not available</value>
+  </data>
+  <data name="Linux_AlreadyRunning" xml:space="preserve">
+    <value>Magpie is running already.</value>
+  </data>
+  <data name="Linux_Home_Toolbar.Description" xml:space="preserve">
+    <value>The toolbar appears at the top of the scaled picture, providing features like FPS display and screenshot capture.</value>
+  </data>
+</root>

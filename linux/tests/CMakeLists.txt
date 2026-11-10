@@ -86,9 +86,14 @@ if(MAGPIE_BUILD_APP)
 	find_package(Qt6 REQUIRED COMPONENTS Test)
 	add_executable(magpie_app_tests
 		AppTestMain.cpp
+		TestAppModels.cpp
 		TestAppWindow.cpp
 	)
 	target_link_libraries(magpie_app_tests PRIVATE magpie_app Qt6::Test magpie_warnings Catch2::Catch2)
+	target_compile_definitions(magpie_app_tests PRIVATE
+		MAGPIE_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"
+		MAGPIE_APP_ID="${MAGPIE_APP_ID}"
+	)
 	# See render/CMakeLists.txt
 	target_compile_options(magpie_app_tests PRIVATE -Wno-missing-field-initializers)
 	catch_discover_tests(magpie_app_tests PROPERTIES LABELS app)

@@ -272,16 +272,20 @@ static void WriteScalingMode(JsonWriter& writer, const ScalingMode& scalingMode)
 	writer.EndObject();
 }
 
-// Invalid parts are skipped. Returns false if the scaling mode as a whole is
-// unusable.
-static bool ReadScalingMode(const JsonObject& scalingModeObj, ScalingMode& scalingMode) noexcept {
+// While loading config.json (not `strict`) invalid parts are skipped, and
+// false is returned only if the scaling mode as a whole is unusable. While
+// importing (`strict`) any invalid part gives false.
+static bool ReadScalingMode(const JsonObject& scalingModeObj, ScalingMode& scalingMode, bool strict = false) noexcept {
 	if (!ReadString(scalingModeObj, "name", scalingMode.name)) {
 		return false;
 	}
 
 	auto effectsNode = scalingModeObj.FindMember("effects");
-	if (effectsNode == scalingModeObj.MemberEnd() || !effectsNode->value.IsArray()) {
+	if (effectsNode == scalingModeObj.MemberEnd()) {
 		return true;
+	}
+	if (!effectsNode->value.IsArray()) {
+		return !strict;
 	}
 
 	auto effectsArray = effectsNode->value.GetArray();
@@ -289,6 +293,9 @@ static bool ReadScalingMode(const JsonObject& scalingModeObj, ScalingMode& scali
 
 	for (const auto& elem : effectsArray) {
 		if (!elem.IsObject()) {
+			if (strict) {
+				return false;
+			}
 			continue;
 		}
 
@@ -296,26 +303,48 @@ static bool ReadScalingMode(const JsonObject& scalingModeObj, ScalingMode& scali
 		EffectItem& effect = scalingMode.effects.emplace_back();
 
 		if (!ReadString(elemObj, "name", effect.name)) {
+			if (strict) {
+				return false;
+			}
 			scalingMode.effects.pop_back();
 			continue;
 		}
 
-		ReadEnum(elemObj, "scalingType", effect.scalingType);
+		if (!ReadEnum(elemObj, "scalingType", effect.scalingType) && strict) {
+			return false;
+		}
 
 		auto scaleNode = elemObj.FindMember("scale");
-		if (scaleNode != elemObj.MemberEnd() && scaleNode->value.IsObject()) {
-			auto scaleObj = scaleNode->value.GetObject();
+		if (scaleNode != elemObj.MemberEnd()) {
+			bool isValid = false;
+			if (scaleNode->value.IsObject()) {
+				auto scaleObj = scaleNode->value.GetObject();
 
-			float x, y;
-			if (ReadFloat(scaleObj, "x", x, true) && ReadFloat(scaleObj, "y", y, true) && x > 0 && y > 0) {
-				effect.scale = { x,y };
+				float x, y;
+				if (ReadFloat(scaleObj, "x", x, true) && ReadFloat(scaleObj, "y", y, true) && x > 0 && y > 0) {
+					effect.scale = { x,y };
+					isValid = true;
+				}
+			}
+			if (!isValid && strict) {
+				return false;
 			}
 		}
 
 		auto parametersNode = elemObj.FindMember("parameters");
-		if (parametersNode != elemObj.MemberEnd() && parametersNode->value.IsObject()) {
+		if (parametersNode != elemObj.MemberEnd()) {
+			if (!parametersNode->value.IsObject()) {
+				if (strict) {
+					return false;
+				}
+				continue;
+			}
+
 			for (const auto& param : parametersNode->value.GetObject()) {
 				if (!param.value.IsNumber()) {
+					if (strict) {
+						return false;
+					}
 					continue;
 				}
 
@@ -324,6 +353,49 @@ static bool ReadScalingMode(const JsonObject& scalingModeObj, ScalingMode& scali
 		}
 	}
 
+	return true;
+}
+
+std::string WriteScalingModesJson(const std::vector<ScalingMode>& scalingModes) noexcept {
+	rapidjson::StringBuffer json;
+	JsonWriter writer(json);
+	writer.StartObject();
+	writer.Key("scalingModes");
+	writer.StartArray();
+	for (const ScalingMode& scalingMode : scalingModes) {
+		WriteScalingMode(writer, scalingMode);
+	}
+	writer.EndArray();
+	writer.EndObject();
+	return { json.GetString(), json.GetSize() };
+}
+
+// Port of ScalingModesService::Import for a file the user chose
+bool ReadScalingModesJson(std::string_view json, std::vector<ScalingMode>& scalingModes) noexcept {
+	rapidjson::Document doc;
+	doc.Parse<rapidjson::kParseCommentsFlag | rapidjson::kParseTrailingCommasFlag>(json.data(), json.size());
+	if (doc.HasParseError() || !doc.IsObject()) {
+		return false;
+	}
+
+	const JsonObject root = static_cast<const rapidjson::Document&>(doc).GetObject();
+	auto scalingModesNode = root.FindMember("scalingModes");
+	if (scalingModesNode == root.MemberEnd()) {
+		return true;
+	}
+	if (!scalingModesNode->value.IsArray()) {
+		return false;
+	}
+
+	std::vector<ScalingMode> imported;
+	for (const auto& elem : scalingModesNode->value.GetArray()) {
+		if (!elem.IsObject() || !ReadScalingMode(elem.GetObject(), imported.emplace_back(), true)) {
+			return false;
+		}
+	}
+
+	scalingModes.insert(scalingModes.end(),
+		std::make_move_iterator(imported.begin()), std::make_move_iterator(imported.end()));
 	return true;
 }
 

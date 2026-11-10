@@ -50,6 +50,12 @@ add_subdirectory(tools/magpie-scale)
 add_subdirectory(tools/magpie-engine)
 add_subdirectory(tools/magpie-ctl)
 
+# The settings application needs Qt 6; the engine and the tools do not
+option(MAGPIE_BUILD_APP "Build the settings application" ON)
+if(MAGPIE_BUILD_APP)
+	add_subdirectory(app)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
 	find_package(Catch2 3 REQUIRED)

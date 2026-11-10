@@ -15,4 +15,14 @@ bool ReadSettingsJson(std::string_view json, Settings& settings) noexcept;
 
 std::string WriteSettingsJson(const Settings& settings) noexcept;
 
+// The scaling modes alone, as the application exports them for another
+// installation: an object with the member "scalingModes".
+std::string WriteScalingModesJson(const std::vector<ScalingMode>& scalingModes) noexcept;
+
+// Appends the scaling modes of an exported file. Unlike the reading of
+// config.json this is strict, as on Windows: if anything is not as it
+// should be, nothing is appended and false is returned. A file without
+// scaling modes is not an error.
+bool ReadScalingModesJson(std::string_view json, std::vector<ScalingMode>& scalingModes) noexcept;
+
 }
