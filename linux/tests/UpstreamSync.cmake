@@ -26,6 +26,12 @@ set(ENTRIES
 	"src/Shared/StrHelper.h|8cb4f8213fc93d5406a59f22d55b2b75c9dd48dbc4d0e4e1e1670392c1eee2fc|linux/core/StrHelper.h"
 	"src/Shared/Version.cpp|4261e966fa11d29692c27d477e87ace6335bdafc9c3bff11e19586a89f122f65|linux/core/Version.cpp"
 	"src/Shared/Logger.h|278f648ccaa416049bc5b3dea1e400f53f4a567848ec6ff9ff3184dc83ae418e|linux/core/Logger.h"
+	"src/Magpie.Core/EffectDrawer.cpp|0af59fd04035ff473c3703832a634217b31dd0ee2588fd01973303a774aca7e0|linux/render/EffectDrawer.cpp"
+	"src/Magpie.Core/EffectDrawer.h|b047b627761ea1c1868b6619e4b0c2cefc167747e00e818e007bf66f7e67b829|linux/render/EffectDrawer.h"
+	"src/Magpie.Core/Renderer.cpp|7e506baddffb73fcc7f085491820ed418f3d5cfc6853ed9037cb5cc7a32ed55d|linux/render/EffectChain.cpp (effect handling), linux/render/ScalingGeometry.cpp (_UpdateDestRect)"
+	"src/Magpie.Core/DeviceResources.cpp|94d70011478046be41166b4440ab83fa0adbbb59f6d0e69e8d3839acd4d8c35a|linux/render/VulkanDevice.cpp"
+	"src/Magpie.Core/EffectsProfiler.cpp|13292caad4970eb4312ac5d07d1f66901f8ef82c3e0c739b8fa48e3fe3bfa0f8|linux/render/EffectsProfiler.cpp"
+	"src/Magpie.Core/SrcTracker.cpp|ecaeba5806414b1167a9f706a9e9fb1ca6fd2e12dc0ff96418c4df3317f41199|linux/render/ScalingGeometry.cpp (only the cropping at the end of _CalcSrcRect)"
 )
 
 set(changed "")

@@ -31,7 +31,9 @@ include(Dxc)
 
 add_subdirectory(core)
 add_subdirectory(fx)
+add_subdirectory(render)
 add_subdirectory(tools/magpie-fxc)
+add_subdirectory(tools/magpie-scale-image)
 
 include(CTest)
 if(BUILD_TESTING)

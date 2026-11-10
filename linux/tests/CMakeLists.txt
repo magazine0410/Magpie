@@ -20,6 +20,23 @@ target_compile_definitions(magpie_tests PRIVATE
 include(Catch)
 catch_discover_tests(magpie_tests)
 
+# The renderer tests need a Vulkan device; a software implementation such as
+# llvmpipe is enough. MAGPIE_TEST_GPUS limits them to some of the devices.
+add_executable(magpie_render_tests
+	TestRenderBasics.cpp
+	TestRenderer.cpp
+)
+
+target_link_libraries(magpie_render_tests PRIVATE magpie_render magpie_warnings Catch2::Catch2WithMain)
+target_compile_definitions(magpie_render_tests PRIVATE
+	MAGPIE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+	MAGPIE_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"
+)
+# See render/CMakeLists.txt
+target_compile_options(magpie_render_tests PRIVATE -Wno-missing-field-initializers)
+
+catch_discover_tests(magpie_render_tests PROPERTIES LABELS gpu TIMEOUT 600)
+
 # Every bundled effect in every combination of FP16 mode and inline parameters.
 # Takes about a minute on a twelve-thread machine.
 add_test(NAME effects-compile-all
