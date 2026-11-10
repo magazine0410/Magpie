@@ -248,6 +248,75 @@ TEST_CASE("A point of the scaled picture is mapped to the source", "[cursor]") {
 	}
 }
 
+TEST_CASE("The picture of windowed scaling keeps the aspect ratio of the source", "[geometry]") {
+	const Size src{ 640, 480 };
+	const Size min{ 640, 480 };
+	const Size max{ 5760, 1080 };
+
+	SECTION("from a width or a height") {
+		int32_t width = 1280, height = 0;
+		REQUIRE(ScalingGeometry::CalcWindowedRendererSize(width, height, src, min, max));
+		CHECK(Size{ width, height } == Size{ 1280, 960 });
+
+		width = 0;
+		height = 600;
+		REQUIRE(ScalingGeometry::CalcWindowedRendererSize(width, height, src, min, max));
+		CHECK(Size{ width, height } == Size{ 800, 600 });
+	}
+
+	SECTION("not smaller than the minimum, not larger than the maximum") {
+		int32_t width = 320, height = 0;
+		REQUIRE(ScalingGeometry::CalcWindowedRendererSize(width, height, src, min, max));
+		CHECK(Size{ width, height } == Size{ 640, 480 });
+
+		width = 4000;
+		height = 0;
+		REQUIRE(ScalingGeometry::CalcWindowedRendererSize(width, height, src, min, max));
+		CHECK(Size{ width, height } == Size{ 1440, 1080 });
+
+		// A tall source is limited by its width
+		width = 100;
+		height = 0;
+		REQUIRE(ScalingGeometry::CalcWindowedRendererSize(width, height, { 300, 600 }, { 300, 600 }, max));
+		CHECK(Size{ width, height } == Size{ 300, 600 });
+	}
+
+	SECTION("a source larger than the maximum cannot be shown") {
+		int32_t width = 2000, height = 0;
+		CHECK_FALSE(ScalingGeometry::CalcWindowedRendererSize(width, height, { 2000, 1500 }, { 2000, 1500 }, max));
+	}
+
+	SECTION("the size it starts with") {
+		Size size;
+		// Automatic: three quarters of the monitor's height
+		REQUIRE(ScalingGeometry::CalcInitialWindowedRendererSize(size, src, { 1920, 1080 }, 0.0f, 0, min, max));
+		CHECK(size == Size{ 1080, 810 });
+		// Automatic on a small monitor: at least a third larger than the source
+		REQUIRE(ScalingGeometry::CalcInitialWindowedRendererSize(size, src, { 800, 600 }, 0.0f, 0, min, max));
+		CHECK(size == Size{ 853, 640 });
+		// A wide source on a monitor that is less wide: three quarters of the width
+		REQUIRE(ScalingGeometry::CalcInitialWindowedRendererSize(size, { 1000, 200 }, { 1920, 1080 }, 0.0f, 0, { 1000, 200 }, max));
+		CHECK(size == Size{ 1440, 288 });
+		// A factor
+		REQUIRE(ScalingGeometry::CalcInitialWindowedRendererSize(size, src, { 1920, 1080 }, 1.5f, 0, min, max));
+		CHECK(size == Size{ 960, 720 });
+		// The width of the last time wins
+		REQUIRE(ScalingGeometry::CalcInitialWindowedRendererSize(size, src, { 1920, 1080 }, 1.5f, 1000, min, max));
+		CHECK(size == Size{ 1000, 750 });
+	}
+
+	SECTION("while the user resizes the window") {
+		// The right edge was dragged: the height follows
+		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 1000, 600 }, { 800, 600 }, src, min, max) == Size{ 1000, 750 });
+		// The bottom edge was dragged: the width follows
+		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 800, 720 }, { 800, 600 }, src, min, max) == Size{ 960, 720 });
+		// A corner: the direction that changed more
+		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 810, 900 }, { 800, 600 }, src, min, max) == Size{ 1200, 900 });
+		// Nothing changed
+		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 800, 600 }, { 800, 600 }, src, min, max) == Size{ 800, 600 });
+	}
+}
+
 TEST_CASE("The cursor is blended over the picture", "[cursor]") {
 	ForEachDevice([](VulkanDevice& device, const GraphicsCardInfo&) {
 		CursorDrawer drawer;

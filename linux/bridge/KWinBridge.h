@@ -9,6 +9,7 @@
 // - the program kscreen-doctor: position and refresh rate of a virtual output
 #pragma once
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include "Bridge.h"
@@ -84,6 +85,20 @@ public:
 	// Puts a window at an exact place, on whatever output that is, and waits
 	// until KWin reports it there. Returns false if that does not happen.
 	bool PlaceWindow(const std::string& windowId, const Placement& placement) noexcept;
+
+	// What else can be set on a window. What has no value is left alone.
+	struct WindowProperties {
+		// The desktop keeps the window above the ordinary ones
+		std::optional<bool> keepAbove;
+		std::optional<bool> minimized;
+		// Not in the task bar, the window switcher and the pager
+		std::optional<bool> skipTaskbar;
+		// Put above the other windows once
+		bool raise = false;
+	};
+
+	// Does not wait for the change to be reported
+	bool SetWindowProperties(const std::string& windowId, const WindowProperties& properties) noexcept;
 
 	// Moves the pointer to a position in desktop coordinates
 	bool MovePointer(Point position) noexcept;

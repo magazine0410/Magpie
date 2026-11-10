@@ -5,6 +5,7 @@
 #include <optional>
 #include <sstream>
 #include <poll.h>
+#include <unistd.h>
 #include <fmt/format.h>
 #include "KWinBridge.h"
 #include "Logger.h"
@@ -35,6 +36,16 @@ static Point ClampTo(Point pt, const Rect& rect) noexcept {
 	return { std::clamp(pt.x, rect.left, rect.right - 1), std::clamp(pt.y, rect.top, rect.bottom - 1) };
 }
 
+static bool Overlaps(const Rect& a, const Rect& b) noexcept {
+	return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+static Rect Union(const Rect& a, const Rect& b) noexcept {
+	return {
+		std::min(a.left, b.left), std::min(a.top, b.top), std::max(a.right, b.right), std::max(a.bottom, b.bottom)
+	};
+}
+
 ScalingSession::~ScalingSession() {
 	Stop();
 }
@@ -51,7 +62,7 @@ void ScalingSession::_WriteStateFile() const noexcept {
 		<< "noBorder " << (_original.hasNoBorder ? 1 : 0) << '\n';
 	if (_isSourceFilling) {
 		// Its place is that of a maximized or fullscreen window on this monitor
-		file << "output " << _output.name << '\n';
+		file << "output " << _monitors[0].name << '\n';
 	}
 	for (const KWinPointerSpeed::Device& device : _pointerDevices) {
 		file << "pointer " << device.sysName << ' ' << device.acceleration << '\n';
@@ -142,6 +153,9 @@ ScalingError ScalingSession::Start(
 	if (options.effects.empty()) {
 		return ScalingError::InvalidScalingMode;
 	}
+	if (options.IsWindowedMode() && options.Is3DGameMode()) {
+		return ScalingError::Windowed3DGameMode;
+	}
 	_options.Prepare();
 
 	ScalingError error = ScalingError::ScalingFailedGeneral;
@@ -160,29 +174,13 @@ ScalingError ScalingSession::Start(
 		return fail(ScalingError::ScalingFailedGeneral);
 	}
 
-	_surface = std::make_unique<LayerSurface>();
-	if (!_surface->Create(_output.name)) {
-		return fail(ScalingError::ScalingFailedGeneral);
-	}
-
-	VkSurfaceKHR surface = VK_NULL_HANDLE;
-	const VkWaylandSurfaceCreateInfoKHR surfaceInfo{
-		.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
-		.display = _surface->Display(),
-		.surface = _surface->Surface()
-	};
-	if (vkCreateWaylandSurfaceKHR(_device.Instance(), &surfaceInfo, nullptr, &surface) != VK_SUCCESS) {
-		Logger::Get().Error("vkCreateWaylandSurfaceKHR failed");
-		return fail(ScalingError::ScalingFailedGeneral);
-	}
-
-	_swapchain = std::make_unique<Swapchain>();
-	if (!_swapchain->Initialize(_device, surface, _surface->GetSize(), config.presentMode)) {
-		return fail(ScalingError::ScalingFailedGeneral);
+	error = ScalingError::ScalingFailedGeneral;
+	if (!_CreateViews(error)) {
+		return fail(error);
 	}
 
 	// The strip around the source is not part of the picture
-	Cropping cropping = options.cropping;
+	Cropping cropping = _options.cropping;
 	cropping.Left += (float)_ringLeft;
 	cropping.Top += (float)_ringTop;
 	cropping.Right += (float)(_ringRight + _padRight);
@@ -194,50 +192,75 @@ ScalingError ScalingSession::Start(
 		.nodeId = _capture->NodeId(),
 		.fixedSize = { _virtualOutputRect.Width(), _virtualOutputRect.Height() },
 		.cropping = cropping,
-		.duplicateFrameDetectionMode = options.duplicateFrameDetectionMode,
-		.isStatisticsForDynamicDetectionEnabled = options.IsStatisticsForDynamicDetectionEnabled()
+		.duplicateFrameDetectionMode = _options.duplicateFrameDetectionMode,
+		.isStatisticsForDynamicDetectionEnabled = _options.IsStatisticsForDynamicDetectionEnabled()
 	}) || !_WaitForFirstFrame()) {
 		return fail(ScalingError::CaptureFailed);
 	}
 
 	_chain = std::make_unique<EffectChain>();
-	if (!_chain->Initialize(_device, options, { config.effectsDir, _swapchain->GetSize() }, _frameSource->Output())) {
+	if (!_chain->Initialize(_device, _options, { config.effectsDir, _RendererSize() }, _frameSource->Output())) {
 		return fail(ScalingError::ScalingFailedGeneral);
 	}
 	_chainInput = _frameSource->Output();
 
 	_cursorDrawer = std::make_unique<CursorDrawer>();
-	if (!_cursorDrawer->Initialize(_device, _swapchain->Format())) {
+	if (!_cursorDrawer->Initialize(_device, _views[0].swapchain->Format())) {
 		return fail(ScalingError::ScalingFailedGeneral);
 	}
 
 	// In benchmark mode every pass through the loop renders, whether the
 	// source has a new frame or not, as on Windows
-	_stepTimer.Initialize(options.IsBenchmarkMode() ? std::numeric_limits<float>::max() : options.minFrameRate,
-		options.maxFrameRate);
-	_cursorAutoHide.SetDelay(options.autoHideCursorDelay);
-	_wakeFds = { _surface->EventFd(), _frameSource->EventFd(), _bridge->EventFd(), _capture->EventFd() };
+	_stepTimer.Initialize(_options.IsBenchmarkMode() ? std::numeric_limits<float>::max() : _options.minFrameRate,
+		_options.maxFrameRate);
+	_cursorAutoHide.SetDelay(_options.autoHideCursorDelay);
+
+	_wakeFds = { _frameSource->EventFd(), _bridge->EventFd(), _capture->EventFd() };
+	for (const View& view : _views) {
+		_wakeFds.push_back(view.surface->EventFd());
+	}
 
 	// "Keep screen on" and "simulate exclusive fullscreen" of the Windows
 	// version. A desktop that cannot do them is no reason not to scale.
-	if (options.IsKeepScreenOn() || options.IsSimulateExclusiveFullscreen()) {
+	if (_options.IsKeepScreenOn() || _options.IsSimulateExclusiveFullscreen()) {
 		_inhibitor = std::make_unique<SessionInhibitor>();
-		if (options.IsKeepScreenOn()) {
+		if (_options.IsKeepScreenOn()) {
 			_inhibitor->KeepScreenOn("A window is scaled");
 		}
-		if (options.IsSimulateExclusiveFullscreen()) {
+		if (_options.IsSimulateExclusiveFullscreen()) {
 			_inhibitor->SuppressNotifications(config.appId, "A window is scaled to fullscreen");
 		}
 	}
 
-	// The first frame is there already
-	_hasNewFrame = true;
 	_isRunning = true;
+	_isSourceActive = true;
+
+	if (_options.IsWindowedMode()) {
+		// The window appears with its first frame, and only then can it be
+		// given its place
+		if (!_Render(true) || !_PlaceOwnWindow()) {
+			return fail(ScalingError::ScalingFailedGeneral);
+		}
+	} else {
+		// The first frame is there already
+		_hasNewFrame = true;
+	}
+
+	if (_options.Is3DGameMode()) {
+		// The pointer belongs to the source from the start, wherever it is,
+		// as CursorManager does in this mode
+		_bridge->MovePointer({
+			_virtualOutputRect.left + (_pointerRect.left + _pointerRect.right) / 2,
+			_virtualOutputRect.top + (_pointerRect.top + _pointerRect.bottom) / 2
+		});
+		++_statistics.pointerCaptures;
+	}
+
 	Logger::Get().Info("Scaling " + Describe());
 	return ScalingError::NoError;
 }
 
-// Chooses the monitor and the place of the virtual output, creates it, and
+// Chooses the monitors and the place of the virtual output, creates it, and
 // moves the source window there
 bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 	_bridge->ListWindows();
@@ -246,7 +269,13 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 		error = ScalingError::InvalidSourceWindow;
 		return false;
 	}
+
 	_isSourceFilling = _original.isFullscreen || _original.isMaximized;
+	if (_isSourceFilling && _options.IsWindowedMode()) {
+		Logger::Get().Error("A maximized or fullscreen window cannot be scaled in windowed mode");
+		error = ScalingError::BannedInWindowedMode;
+		return false;
+	}
 	if (_isSourceFilling && !_options.IsAllowScalingMaximized()) {
 		Logger::Get().Error("The window is maximized or fullscreen, and scaling such windows is not allowed");
 		error = ScalingError::Maximized;
@@ -266,20 +295,30 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 		error = ScalingError::InvalidSourceWindow;
 		return false;
 	}
-	if (Rect cropped{ 0, 0, sourceSize.width, sourceSize.height };
-		!ScalingGeometry::CropSourceRect(cropped, _options.cropping)) {
+	Rect cropped{ 0, 0, sourceSize.width, sourceSize.height };
+	if (!ScalingGeometry::CropSourceRect(cropped, _options.cropping)) {
 		error = ScalingError::InvalidCropping;
 		return false;
 	}
+	_srcSize = { cropped.Width(), cropped.Height() };
 
 	VirtualOutputPlan plan;
-	if (!PlanVirtualOutput(_original.frameRect, sourceSize, _isSourceFilling, _bridge->ListOutputs(), plan)) {
+	if (!PlanVirtualOutput({
+		.frameRect = _original.frameRect,
+		.sourceSize = sourceSize,
+		.fillsOutput = _isSourceFilling,
+		.isWindowedMode = _options.IsWindowedMode(),
+		.is3DGameMode = _options.Is3DGameMode(),
+		.multiMonitorUsage = _options.multiMonitorUsage
+	}, _bridge->ListOutputs(), plan)) {
 		Logger::Get().Error("The window is not on a monitor, or the monitors leave no room for the virtual output");
 		error = ScalingError::InvalidSourceWindow;
 		return false;
 	}
-	_output = plan.monitor;
-	_otherOutputs = plan.otherMonitors;
+	_monitors = plan.monitors;
+	_otherMonitors = plan.otherMonitors;
+	_refreshRate = plan.refreshRate;
+	_rendererRect = plan.rendererRect;
 	_ringLeft = plan.ringLeft;
 	_ringTop = plan.ringTop;
 	_ringRight = plan.ringRight;
@@ -305,18 +344,19 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 	_virtualOutputRect = { position.x, position.y, position.x + outputSize.width, position.y + outputSize.height };
 	// The refresh rate of the monitor, so that the source is not held to the
 	// 60 Hz a new virtual output has
-	if (!_bridge->ConfigureOutput(_virtualOutputName, outputSize, position, _output.refreshRate)) {
+	if (!_bridge->ConfigureOutput(_virtualOutputName, outputSize, position, _refreshRate)) {
 		return false;
 	}
 
+	// A fullscreen window shows no decoration whatever this says
+	_sourceNoBorder = _original.isFullscreen ? _original.hasNoBorder : !keepsBorder;
 	_isWindowMoved = true;
 	if (!_bridge->PlaceWindow(_windowId, {
 		.frameRect = {
 			position.x + _sourceRect.left, position.y + _sourceRect.top,
 			position.x + _sourceRect.right, position.y + _sourceRect.bottom
 		},
-		// A fullscreen window shows no decoration whatever this says
-		.noBorder = _original.isFullscreen ? _original.hasNoBorder : !keepsBorder,
+		.noBorder = _sourceNoBorder,
 		.activate = true,
 		// A maximized or fullscreen window takes the size of the output by itself
 		.output = _isSourceFilling ? _virtualOutputName : std::string()
@@ -330,56 +370,84 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 }
 
 bool ScalingSession::PlanVirtualOutput(
-	const Rect& frameRect,
-	Size sourceSize,
-	bool fillsOutput,
+	const PlanRequest& request,
 	std::span<const OutputInfo> outputs,
 	VirtualOutputPlan& plan
 ) noexcept {
 	plan = {};
 
 	// The monitor the window is on, by its centre
+	const Rect& frameRect = request.frameRect;
 	const Point centre{ (frameRect.left + frameRect.right) / 2, (frameRect.top + frameRect.bottom) / 2 };
+	const OutputInfo* home = nullptr;
 	Rect bounds{ INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN };
-	bool found = false;
 	for (const OutputInfo& output : outputs) {
 		if (output.name.starts_with("Virtual-")) {
 			continue;
 		}
+		bounds = Union(bounds, output.rect);
+		if (!home && Contains(output.rect, centre)) {
+			home = &output;
+		}
+	}
+	if (!home) {
+		return false;
+	}
 
-		bounds = {
-			std::min(bounds.left, output.rect.left), std::min(bounds.top, output.rect.top),
-			std::max(bounds.right, output.rect.right), std::max(bounds.bottom, output.rect.bottom)
-		};
-		if (!found && Contains(output.rect, centre)) {
-			plan.monitor = output;
-			found = true;
+	// The monitors that show the picture, as
+	// ScalingWindow::_CalcFullscreenRendererRect chooses them
+	plan.monitors.push_back(*home);
+	plan.rendererRect = home->rect;
+	plan.refreshRate = home->refreshRate;
+	for (const OutputInfo& output : outputs) {
+		if (output.name.starts_with("Virtual-") || &output == home) {
+			continue;
+		}
+
+		bool isUsed = false;
+		if (!request.isWindowedMode) {
+			if (request.multiMonitorUsage == MultiMonitorUsage::All) {
+				isUsed = true;
+			} else if (request.multiMonitorUsage == MultiMonitorUsage::Intersected) {
+				// A maximized window is on one monitor only
+				isUsed = !request.fillsOutput && Overlaps(output.rect, frameRect);
+			}
+		}
+
+		if (isUsed) {
+			plan.monitors.push_back(output);
+			plan.rendererRect = Union(plan.rendererRect, output.rect);
+			plan.refreshRate = std::max(plan.refreshRate, output.refreshRate);
 		} else {
 			plan.otherMonitors.push_back(output);
 		}
 	}
-	if (!found) {
-		return false;
-	}
 
-	// The sides on which another monitor lies next to this one; the pointer
-	// leaves through them. Without a neighbour the edge of the virtual
-	// output keeps the pointer in.
-	const Rect& monitor = plan.monitor.rect;
-	for (const OutputInfo& other : plan.otherMonitors) {
-		const bool overlapsVertically = other.rect.top < monitor.bottom && other.rect.bottom > monitor.top;
-		const bool overlapsHorizontally = other.rect.left < monitor.right && other.rect.right > monitor.left;
-		plan.exitLeft = plan.exitLeft || (overlapsVertically && other.rect.right <= monitor.left);
-		plan.exitRight = plan.exitRight || (overlapsVertically && other.rect.left >= monitor.right);
-		plan.exitTop = plan.exitTop || (overlapsHorizontally && other.rect.bottom <= monitor.top);
-		plan.exitBottom = plan.exitBottom || (overlapsHorizontally && other.rect.top >= monitor.bottom);
+	if (request.isWindowedMode) {
+		// Around a window the desktop goes on in every direction
+		plan.exitLeft = plan.exitTop = plan.exitRight = plan.exitBottom = true;
+	} else if (!request.is3DGameMode) {
+		// The sides on which another monitor lies next to the picture; the
+		// pointer leaves through them. Without a neighbour the edge of the
+		// virtual output keeps the pointer in. In 3D game mode the pointer
+		// never leaves.
+		const Rect& area = plan.rendererRect;
+		for (const OutputInfo& other : plan.otherMonitors) {
+			const bool overlapsVertically = other.rect.top < area.bottom && other.rect.bottom > area.top;
+			const bool overlapsHorizontally = other.rect.left < area.right && other.rect.right > area.left;
+			plan.exitLeft = plan.exitLeft || (overlapsVertically && other.rect.right <= area.left);
+			plan.exitRight = plan.exitRight || (overlapsVertically && other.rect.left >= area.right);
+			plan.exitTop = plan.exitTop || (overlapsHorizontally && other.rect.bottom <= area.top);
+			plan.exitBottom = plan.exitBottom || (overlapsHorizontally && other.rect.top >= area.bottom);
+		}
 	}
 
 	// A mode with another refresh rate than 60 Hz has to be computed, and the
 	// formula for that only yields widths that are multiples of 8
-	const bool needsCustomMode = plan.monitor.refreshRate > DEFAULT_REFRESH_RATE;
+	const bool needsCustomMode = plan.refreshRate > DEFAULT_REFRESH_RATE;
+	const Size sourceSize = request.sourceSize;
 
-	if (fillsOutput) {
+	if (request.fillsOutput) {
 		// The window takes the size of the output, so there is no room for a
 		// strip around it; its outermost pixels serve as the strip. A width
 		// that is rounded up makes the window that much wider.
@@ -393,7 +461,7 @@ bool ScalingSession::PlanVirtualOutput(
 			plan.size.width - (plan.exitRight ? RING : 0), plan.size.height - (plan.exitBottom ? RING : 0)
 		};
 	} else {
-		// A strip on every side with a neighbour
+		// A strip on every side with an exit
 		plan.ringLeft = plan.exitLeft ? RING : 0;
 		plan.ringTop = plan.exitTop ? RING : 0;
 		plan.ringRight = plan.exitRight ? RING : 0;
@@ -417,6 +485,173 @@ bool ScalingSession::PlanVirtualOutput(
 	plan.position.y = std::min(plan.position.y, MAX_COORDINATE - plan.size.height);
 	return plan.position.y - bounds.bottom >= VIRTUAL_OUTPUT_GAP / 2 &&
 		plan.position.x + plan.size.width <= MAX_COORDINATE;
+}
+
+bool ScalingSession::_AddView(std::unique_ptr<ScalingSurface> surface, const Rect& rect) noexcept {
+	VkSurfaceKHR vkSurface = VK_NULL_HANDLE;
+	const VkWaylandSurfaceCreateInfoKHR surfaceInfo{
+		.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
+		.display = surface->Display(),
+		.surface = surface->Surface()
+	};
+	if (vkCreateWaylandSurfaceKHR(_device.Instance(), &surfaceInfo, nullptr, &vkSurface) != VK_SUCCESS) {
+		Logger::Get().Error("vkCreateWaylandSurfaceKHR failed");
+		return false;
+	}
+
+	auto swapchain = std::make_unique<Swapchain>();
+	if (!swapchain->Initialize(_device, vkSurface, surface->GetSize(), _config.presentMode)) {
+		return false;
+	}
+	if (!_views.empty() && swapchain->Format() != _views[0].swapchain->Format()) {
+		Logger::Get().Error("The monitors take pictures in different formats, which is not supported");
+		return false;
+	}
+
+	_views.push_back({ std::move(surface), std::move(swapchain), rect });
+	return true;
+}
+
+bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
+	if (!_options.IsWindowedMode()) {
+		// One surface per monitor; together they show one picture
+		for (const OutputInfo& monitor : _monitors) {
+			auto surface = std::make_unique<ScalingSurface>();
+			if (!surface->CreateLayer(monitor.name, !_options.IsTopmostDisabled()) ||
+				!_AddView(std::move(surface), monitor.rect)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// A window with the aspect ratio of the source. On Windows it has to be
+	// larger than the source, which lies below it there; here the source is
+	// elsewhere, and the picture only may not be smaller than the source.
+	Rect bounds = _monitors[0].rect;
+	for (const OutputInfo& monitor : _otherMonitors) {
+		bounds = Union(bounds, monitor.rect);
+	}
+	_minWindowedSize = _srcSize;
+	_maxWindowedSize = { bounds.Width(), bounds.Height() };
+
+	const Rect& monitor = _monitors[0].rect;
+	Size size;
+	if (!ScalingGeometry::CalcInitialWindowedRendererSize(size, _srcSize, { monitor.Width(), monitor.Height() },
+		_options.initialWindowedScaleFactor, _config.lastWindowedWidth, _minWindowedSize, _maxWindowedSize)) {
+		Logger::Get().Error("The window is too large for windowed scaling");
+		error = ScalingError::InvalidSourceWindow;
+		return false;
+	}
+
+	auto surface = std::make_unique<ScalingSurface>();
+	if (!surface->CreateWindow(_original.title.empty() ? "Magpie" : _original.title, _config.appId, size,
+		_minWindowedSize, [this](Size proposed, Size current) {
+			return ScalingGeometry::CalcResizedWindowedRendererSize(
+				proposed, current, _srcSize, _minWindowedSize, _maxWindowedSize);
+		})) {
+		return false;
+	}
+
+	// Where the window is, is known once it has appeared; until then it is
+	// taken to be where the source was
+	const Point centre{
+		(_original.frameRect.left + _original.frameRect.right) / 2,
+		(_original.frameRect.top + _original.frameRect.bottom) / 2
+	};
+	_rendererRect = {
+		centre.x - size.width / 2, centre.y - size.height / 2,
+		centre.x - size.width / 2 + size.width, centre.y - size.height / 2 + size.height
+	};
+	_windowedWidth = size.width;
+	return _AddView(std::move(surface), _rendererRect);
+}
+
+bool ScalingSession::_PlaceOwnWindow() noexcept {
+	// The desktop lists the window after its first frame
+	WindowInfo own;
+	const auto deadline = steady_clock::now() + 2s;
+	while (true) {
+		bool found = false;
+		for (const WindowInfo& window : _bridge->ListWindows()) {
+			if (window.pid == (uint32_t)getpid() && window.id != _windowId) {
+				own = window;
+				found = true;
+			}
+		}
+		if (found) {
+			break;
+		}
+		if (steady_clock::now() > deadline) {
+			Logger::Get().Error("The window with the scaled picture did not appear");
+			return false;
+		}
+		if (!_views[0].surface->PumpEvents()) {
+			return false;
+		}
+		usleep(10'000);
+	}
+	_ownWindowId = own.id;
+
+	// The content gets the centre that the source had, as on Windows, but
+	// the window stays on its monitor if it fits there. The title bar wins
+	// over the bottom edge.
+	const Rect& content = _rendererRect;
+	Rect frame{
+		content.left - (own.clientRect.left - own.frameRect.left),
+		content.top - (own.clientRect.top - own.frameRect.top),
+		0, 0
+	};
+	const Rect& monitor = _monitors[0].rect;
+	frame.left = std::max(std::min(frame.left, monitor.right - own.frameRect.Width()), monitor.left);
+	frame.top = std::max(std::min(frame.top, monitor.bottom - own.frameRect.Height()), monitor.top);
+	frame.right = frame.left + own.frameRect.Width();
+	frame.bottom = frame.top + own.frameRect.Height();
+
+	if (!_bridge->PlaceWindow(_ownWindowId, { .frameRect = frame, .noBorder = own.hasNoBorder })) {
+		Logger::Get().Warn("The window with the scaled picture could not be put where the source was");
+	}
+	// The source stands for both in the task bar and the window switcher
+	_bridge->SetWindowProperties(_ownWindowId, {
+		.keepAbove = !_options.IsTopmostDisabled(),
+		.skipTaskbar = true,
+		.raise = true
+	});
+	_isOwnWindowKeptAbove = !_options.IsTopmostDisabled();
+	// A new window may have taken the focus; it belongs to the source
+	_bridge->PlaceWindow(_windowId, { .noBorder = _sourceNoBorder, .activate = true, .setGeometry = false });
+
+	return _TrackOwnWindow();
+}
+
+bool ScalingSession::_TrackOwnWindow() noexcept {
+	WindowInfo own;
+	if (!_bridge->GetWindow(_ownWindowId, own)) {
+		_endReason = EndReason::WindowClosed;
+		return false;
+	}
+	if (own.isMinimized) {
+		// Minimizing the picture means minimizing what it shows; scaling
+		// goes on when the source is shown again
+		_bridge->SetWindowProperties(_windowId, { .minimized = true });
+		_endReason = EndReason::SourceMinimized;
+		return false;
+	}
+	if (own.isActive) {
+		// The user clicked the title bar. The keyboard belongs to the source.
+		_bridge->PlaceWindow(_windowId, { .noBorder = _sourceNoBorder, .activate = true, .setGeometry = false });
+	}
+
+	// The place from the desktop, the size from the surface, which is ahead
+	// of the desktop while the user resizes
+	View& view = _views[0];
+	const Size size = view.surface->GetSize();
+	view.rect = {
+		own.clientRect.left, own.clientRect.top,
+		own.clientRect.left + size.width, own.clientRect.top + size.height
+	};
+	_rendererRect = view.rect;
+	return true;
 }
 
 bool ScalingSession::_WaitForFirstFrame() noexcept {
@@ -445,8 +680,46 @@ bool ScalingSession::_WaitForFirstFrame() noexcept {
 
 Rect ScalingSession::_DestRect() const noexcept {
 	const Texture& output = *_chain->Output();
-	return ScalingGeometry::CalcDestRect(_swapchain->GetSize(),
+	return ScalingGeometry::CalcDestRect(_RendererSize(),
 		{ (int32_t)output.width, (int32_t)output.height }, _options.outputAlignment);
+}
+
+bool ScalingSession::_UpdateSizes(bool& resized) noexcept {
+	resized = false;
+	for (View& view : _views) {
+		const Size size = view.surface->GetSize();
+		if (size == Size{ view.rect.Width(), view.rect.Height() } && size == view.swapchain->GetSize()) {
+			continue;
+		}
+
+		if (!view.swapchain->Resize(size)) {
+			return false;
+		}
+		view.rect.right = view.rect.left + size.width;
+		view.rect.bottom = view.rect.top + size.height;
+		resized = true;
+	}
+	if (!resized) {
+		return true;
+	}
+
+	if (_options.IsWindowedMode()) {
+		_rendererRect = _views[0].rect;
+		if (!_views[0].surface->IsSizeFixed()) {
+			_windowedWidth = _rendererRect.Width();
+		}
+	} else {
+		_rendererRect = _views[0].rect;
+		for (const View& view : _views) {
+			_rendererRect = Union(_rendererRect, view.rect);
+		}
+	}
+
+	if (!_chain->Resize(_RendererSize(), _frameSource->Output())) {
+		return false;
+	}
+	_chainInput = _frameSource->Output();
+	return true;
 }
 
 bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
@@ -462,7 +735,18 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 	_stepStatus = _stepTimer.WaitForNextFrame(
 		!_hasNewFrame && _stepStatus != StepTimerStatus::WaitingForFPSLimiter, fpsUpdated);
 
-	if (!_surface->PumpEvents() || _surface->IsClosed() || !_bridge->Dispatch()) {
+	for (const View& view : _views) {
+		if (!view.surface->PumpEvents()) {
+			_endReason = EndReason::Failed;
+			return false;
+		}
+		if (view.surface->IsClosed()) {
+			// A window is closed by the user, a layer surface by the desktop
+			_endReason = _options.IsWindowedMode() ? EndReason::WindowClosed : EndReason::Failed;
+			return false;
+		}
+	}
+	if (!_bridge->Dispatch()) {
 		_endReason = EndReason::Failed;
 		return false;
 	}
@@ -470,13 +754,22 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 		_endReason = EndReason::CaptureFailed;
 		return false;
 	}
+	if (_options.IsWindowedMode() && !_TrackOwnWindow()) {
+		return false;
+	}
 	if (!_TrackSource()) {
+		return false;
+	}
+
+	bool resized = false;
+	if (!_UpdateSizes(resized)) {
+		_endReason = EndReason::Failed;
 		return false;
 	}
 
 	// The frame source, unless the frame rate limit says to wait. The cursor
 	// is not held back by the limit.
-	bool runEffects = false;
+	bool runEffects = resized;
 	if (_stepStatus != StepTimerStatus::WaitingForFPSLimiter) {
 		const FrameSourceState state = _hasNewFrame ? FrameSourceState::NewFrame : _frameSource->Update();
 		_hasNewFrame = false;
@@ -485,7 +778,8 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 			_endReason = EndReason::CaptureFailed;
 			return false;
 		}
-		runEffects = state == FrameSourceState::NewFrame || _stepStatus == StepTimerStatus::ForceNewFrame;
+		runEffects = runEffects || state == FrameSourceState::NewFrame ||
+			_stepStatus == StepTimerStatus::ForceNewFrame;
 	}
 
 	_UpdatePointer(_DestRect());
@@ -540,26 +834,78 @@ bool ScalingSession::_TrackSource() noexcept {
 		return false;
 	}
 
-	// Another window became active. On Windows the scaled picture then goes
-	// behind that window; a layer surface cannot, so scaling ends if the
-	// window is on the monitor the picture covers. Windows on the virtual
-	// output are dialogs and menus of the source and part of the picture.
-	const std::string active = _bridge->ActiveWindowId();
-	WindowInfo activeInfo;
-	if (!active.empty() && active != _windowId && _bridge->GetWindow(active, activeInfo)) {
-		// The tolerance of ScalingWindow::_CheckForegroundFor3DGameMode
-		static constexpr int32_t TOLERANCE = 8;
-		const Rect& frame = activeInfo.frameRect;
-		const Rect& monitor = _output.rect;
-		const int32_t overlapWidth = std::min(frame.right, monitor.right) - std::max(frame.left, monitor.left);
-		const int32_t overlapHeight = std::min(frame.bottom, monitor.bottom) - std::max(frame.top, monitor.top);
-		if (overlapWidth >= TOLERANCE && overlapHeight >= TOLERANCE) {
-			_endReason = EndReason::FocusLost;
-			return false;
+	const bool wasSourceActive = _isSourceActive;
+	_isSourceActive = info.isActive;
+
+	// The window that is active in place of the source, unless it is on the
+	// virtual output: those are dialogs and menus of the source and part of
+	// the picture.
+	WindowInfo other;
+	bool isOtherActive = false;
+	if (!_isSourceActive) {
+		const std::string active = _bridge->ActiveWindowId();
+		isOtherActive = !active.empty() && active != _windowId && active != _ownWindowId &&
+			_bridge->GetWindow(active, other) && !Overlaps(other.frameRect, _virtualOutputRect);
+	}
+
+	if (!_options.IsWindowedMode()) {
+		// On Windows the scaled picture then goes behind that window; a
+		// layer surface cannot, so scaling ends if the window is on a
+		// monitor that the picture covers.
+		if (isOtherActive) {
+			// The tolerance of ScalingWindow::_CheckForegroundFor3DGameMode
+			static constexpr int32_t TOLERANCE = 8;
+			const Rect& frame = other.frameRect;
+			for (const OutputInfo& monitor : _monitors) {
+				const Rect& rect = monitor.rect;
+				const int32_t overlapWidth = std::min(frame.right, rect.right) - std::max(frame.left, rect.left);
+				const int32_t overlapHeight = std::min(frame.bottom, rect.bottom) - std::max(frame.top, rect.top);
+				if (overlapWidth >= TOLERANCE && overlapHeight >= TOLERANCE) {
+					_endReason = EndReason::FocusLost;
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	// Windowed mode. While the source is the active window, the window with
+	// its picture is kept above the others, as ScalingWindow::_CalcTopmostState
+	// has it; it comes to the front with the source in any case.
+	const bool keepAbove = _isSourceActive && !_options.IsTopmostDisabled();
+	const bool becameActive = _isSourceActive && !wasSourceActive;
+	if (keepAbove != _isOwnWindowKeptAbove || becameActive) {
+		_isOwnWindowKeptAbove = keepAbove;
+		_bridge->SetWindowProperties(_ownWindowId, { .keepAbove = keepAbove, .raise = becameActive });
+	}
+
+	// The user went to another window, with the keyboard for example. The
+	// pointer follows to where its picture was, so that it can be used
+	// there. The desktop may report the source as inactive before it reports
+	// the other window as active, so this is done once per loss of focus and
+	// not at the moment the source loses it.
+	if (_isSourceActive) {
+		_isFocusLossHandled = false;
+	} else if (isOtherActive && !_isFocusLossHandled) {
+		_isFocusLossHandled = true;
+		if (_frameSource->CursorState().isVisible) {
+			_ReleasePointerToPicture(_DestRect());
+			++_statistics.pointerReleases;
+			_isCaptureBlocked = true;
+			_captureBlockSettleTime = steady_clock::now() + 150ms;
 		}
 	}
 
 	return true;
+}
+
+void ScalingSession::_ReleasePointerToPicture(const Rect& destRect) noexcept {
+	const Size rendererSize = _RendererSize();
+	const Rect rendererArea{ 0, 0, rendererSize.width, rendererSize.height };
+	const Point scaled = ClampTo(ScalingGeometry::SrcToScaling(_frameSource->CursorState().pos,
+		_frameSource->SrcRect(), destRect, rendererArea, false), rendererArea);
+	_SetPointerSlowed(false, destRect);
+	_bridge->MovePointer({ _rendererRect.left + scaled.x, _rendererRect.top + scaled.y });
 }
 
 // Port of the capture logic of CursorManager for a pointer that is either on
@@ -567,8 +913,8 @@ bool ScalingSession::_TrackSource() noexcept {
 // drawn scaled) or on a real monitor (released)
 void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 	const CaptureCursorState& cursor = _frameSource->CursorState();
-	const Size rendererSize = _swapchain->GetSize();
-	const Rect rendererRect{ 0, 0, rendererSize.width, rendererSize.height };
+	const Size rendererSize = _RendererSize();
+	const Rect rendererArea{ 0, 0, rendererSize.width, rendererSize.height };
 	const Point origin{ _virtualOutputRect.left, _virtualOutputRect.top };
 
 	if (cursor.isVisible) {
@@ -579,13 +925,13 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 			return;
 		}
 		// In the strip around the source: the user pushes against an edge
-		// that has a neighbouring monitor
+		// behind which the desktop goes on
 		if (cursor.pos == _handledRingPos) {
 			return;
 		}
 		_handledRingPos = cursor.pos;
 
-		// Where that is on the monitors: just outside the one with the
+		// Where that is on the desktop: just outside the area with the
 		// picture, with black bars skipped, as _StopCapture does. The strip
 		// of a source that fills its output is inside the source and counts
 		// as the first pixel outside.
@@ -601,15 +947,21 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 		} else if (outside.y >= _pointerRect.bottom) {
 			outside.y = std::max(outside.y, srcRect.bottom);
 		}
-		const Point scaled = ScalingGeometry::SrcToScaling(outside, srcRect, destRect, rendererRect, true);
-		const Point target{ _output.rect.left + scaled.x, _output.rect.top + scaled.y };
-		for (const OutputInfo& other : _otherOutputs) {
-			if (Contains(other.rect, target)) {
-				_SetPointerSlowed(false, destRect);
-				_bridge->MovePointer(target);
-				++_statistics.pointerReleases;
-				return;
-			}
+		const Point scaled = ScalingGeometry::SrcToScaling(outside, srcRect, destRect, rendererArea, true);
+		const Point target{ _rendererRect.left + scaled.x, _rendererRect.top + scaled.y };
+
+		// It has to be on a monitor. Next to a fullscreen picture that is
+		// one of the other monitors; next to a window any monitor will do.
+		const auto isOnOneOf = [&](const std::vector<OutputInfo>& monitors) {
+			return std::ranges::any_of(monitors, [&](const OutputInfo& monitor) {
+				return Contains(monitor.rect, target);
+			});
+		};
+		if (isOnOneOf(_otherMonitors) || (_options.IsWindowedMode() && isOnOneOf(_monitors))) {
+			_SetPointerSlowed(false, destRect);
+			_bridge->MovePointer(target);
+			++_statistics.pointerReleases;
+			return;
 		}
 
 		// No monitor there: the pointer stays with the source
@@ -623,21 +975,45 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 	// Released, or the source hides the cursor. If the pointer is on the
 	// scaled picture, it goes to the point of the source that it shows there,
 	// as _StartCapture does.
-	if (_surface->IsPointerInside()) {
-		// Not again before the move has had time to take effect
+	for (const View& view : _views) {
+		if (!view.surface->IsPointerInside()) {
+			continue;
+		}
+
 		const auto now = steady_clock::now();
+		if (_isCaptureBlocked) {
+			// Not before the pointer has moved again, and the move that sent
+			// it here does not count
+			const uint32_t motionCount = view.surface->PointerMotionCount();
+			if (now < _captureBlockSettleTime) {
+				_captureBlockMotionCount = motionCount;
+				return;
+			}
+			if (motionCount == _captureBlockMotionCount) {
+				return;
+			}
+			_isCaptureBlocked = false;
+		}
+
+		// Not again before the move has had time to take effect
 		if (now - _lastCaptureTime < 50ms) {
 			return;
 		}
 		_lastCaptureTime = now;
 
 		const Rect& srcRect = _frameSource->SrcRect();
-		const Point onPicture = ClampTo(_surface->PointerPos(), destRect);
+		const Point onSurface = view.surface->PointerPos();
+		const Point onRenderer{
+			view.rect.left - _rendererRect.left + onSurface.x,
+			view.rect.top - _rendererRect.top + onSurface.y
+		};
+		const Point onPicture = ClampTo(onRenderer, destRect);
 		const Point onSource = ClampTo(
 			ClampTo(ScalingGeometry::ScalingToSrc(onPicture, srcRect, destRect), srcRect), _pointerRect);
 		_SetPointerSlowed(true, destRect);
 		_bridge->MovePointer({ origin.x + onSource.x, origin.y + onSource.y });
 		++_statistics.pointerCaptures;
+		return;
 	}
 }
 
@@ -670,7 +1046,7 @@ void ScalingSession::_SetPointerSlowed(bool slowed, const Rect& destRect) noexce
 bool ScalingSession::_Render(bool runEffects) noexcept {
 	if (runEffects) {
 		if (_frameSource->Output() != _chainInput) {
-			if (!_chain->Resize(_swapchain->GetSize(), _frameSource->Output())) {
+			if (!_chain->Resize(_RendererSize(), _frameSource->Output())) {
 				return false;
 			}
 			_chainInput = _frameSource->Output();
@@ -687,36 +1063,50 @@ bool ScalingSession::_Render(bool runEffects) noexcept {
 		_loadedCursorImage = cursor.imageSerial;
 	}
 
-	const auto draw = [&](VkCommandBuffer cmd, const Swapchain::Frame& frame) {
-		if (runEffects) {
-			_chain->Draw(cmd, _stepTimer.GetFrameCount());
+	// The effects are drawn once, with the first surface
+	bool drawEffects = runEffects;
+	for (View& view : _views) {
+		const auto draw = [&](VkCommandBuffer cmd, const Swapchain::Frame& frame) {
+			if (drawEffects) {
+				_chain->Draw(cmd, _stepTimer.GetFrameCount());
+			}
+
+			// The renderer area and the picture in it, relative to this surface
+			const Size viewSize = view.swapchain->GetSize();
+			const Point offset{ _rendererRect.left - view.rect.left, _rendererRect.top - view.rect.top };
+			const Rect rendererArea{
+				offset.x, offset.y, offset.x + _rendererRect.Width(), offset.y + _rendererRect.Height()
+			};
+			Rect destRect = _DestRect();
+			destRect = {
+				destRect.left + offset.x, destRect.top + offset.y,
+				destRect.right + offset.x, destRect.bottom + offset.y
+			};
+			Swapchain::Compose(cmd, *_chain->Output(), frame.image, viewSize, destRect);
+
+			if (cursor.isVisible) {
+				const Rect& srcRect = _frameSource->SrcRect();
+				const Point cursorPos = ScalingGeometry::SrcToScaling(cursor.pos, srcRect, destRect, rendererArea, false);
+				_cursorDrawer->Draw(cmd, { frame.image, frame.view, viewSize, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL },
+					cursorPos, { srcRect.Width(), srcRect.Height() }, destRect, _options);
+			}
+		};
+
+		Swapchain::FrameResult result = view.swapchain->PresentFrame(draw);
+		if (result == Swapchain::FrameResult::NeedsResize) {
+			// The surface changed under the frame; once more with the new size
+			bool resized = false;
+			if (!_UpdateSizes(resized) || (!resized && !view.swapchain->Resize(view.surface->GetSize()))) {
+				return false;
+			}
+			drawEffects = true;
+			runEffects = true;
+			result = view.swapchain->PresentFrame(draw);
 		}
-
-		const Size rendererSize = _swapchain->GetSize();
-		const Rect destRect = _DestRect();
-		Swapchain::Compose(cmd, *_chain->Output(), frame.image, rendererSize, destRect);
-
-		if (cursor.isVisible) {
-			const Rect& srcRect = _frameSource->SrcRect();
-			const Rect rendererRect{ 0, 0, rendererSize.width, rendererSize.height };
-			const Point cursorPos = ScalingGeometry::SrcToScaling(cursor.pos, srcRect, destRect, rendererRect, false);
-			_cursorDrawer->Draw(cmd, { frame.image, frame.view, rendererSize, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL },
-				cursorPos, { srcRect.Width(), srcRect.Height() }, destRect, _options);
-		}
-	};
-
-	Swapchain::FrameResult result = _swapchain->PresentFrame(draw);
-	if (result == Swapchain::FrameResult::NeedsResize) {
-		// The surface changed under the frame; once more with the new size
-		if (!_swapchain->Resize(_surface->GetSize()) ||
-			!_chain->Resize(_swapchain->GetSize(), _frameSource->Output())) {
+		if (result != Swapchain::FrameResult::Presented) {
 			return false;
 		}
-		runEffects = true;
-		result = _swapchain->PresentFrame(draw);
-	}
-	if (result != Swapchain::FrameResult::Presented) {
-		return false;
+		drawEffects = false;
 	}
 
 	_drawnCursor = cursor;
@@ -791,11 +1181,7 @@ void ScalingSession::Stop() noexcept {
 	// The pointer goes to where the user sees it, as the destructor of
 	// CursorManager does
 	if (_isRunning && _frameSource->CursorState().isVisible) {
-		const Size rendererSize = _swapchain->GetSize();
-		const Rect rendererRect{ 0, 0, rendererSize.width, rendererSize.height };
-		const Point scaled = ClampTo(ScalingGeometry::SrcToScaling(_frameSource->CursorState().pos,
-			_frameSource->SrcRect(), _DestRect(), rendererRect, false), rendererRect);
-		_bridge->MovePointer({ _output.rect.left + scaled.x, _output.rect.top + scaled.y });
+		_ReleasePointerToPicture(_DestRect());
 	}
 
 	if (_isPointerSlowed) {
@@ -817,11 +1203,11 @@ void ScalingSession::Stop() noexcept {
 				// The desktop decides the place of such a window on its
 				// monitor. That place is known if the window is in the state
 				// it had before scaling.
-				placement.output = _output.name;
+				placement.output = _monitors[0].name;
 				if (info.isFullscreen == _original.isFullscreen && info.isMaximized == _original.isMaximized) {
 					placement.frameRect = _original.frameRect;
 				}
-				Logger::Get().Info("Putting the window back on " + _output.name);
+				Logger::Get().Info("Putting the window back on " + _monitors[0].name);
 				_bridge->PlaceWindow(_windowId, placement);
 			} else {
 				// The place it had, with the size it has now: the window may
@@ -841,12 +1227,11 @@ void ScalingSession::Stop() noexcept {
 		_isWindowMoved = false;
 	}
 
-	// In this order: everything that draws, the surface, the capture
+	// In this order: everything that draws, the surfaces, the capture
 	_cursorDrawer.reset();
 	_chain.reset();
 	_chainInput.reset();
-	_swapchain.reset();
-	_surface.reset();
+	_views.clear();
 	_frameSource.reset();
 	// Removes the virtual output
 	_capture.reset();
@@ -866,7 +1251,7 @@ void ScalingSession::Stop() noexcept {
 
 	if (_isRunning) {
 		Logger::Get().Info(fmt::format("Scaling ended: {} frames scaled, {} presented; "
-			"the pointer went to the source {} times and to another monitor {} times",
+			"the pointer went to the source {} times and away from it {} times",
 			_statistics.scaledFrames, _statistics.presentedFrames,
 			_statistics.pointerCaptures, _statistics.pointerReleases));
 	}
@@ -874,16 +1259,47 @@ void ScalingSession::Stop() noexcept {
 	_bridge = nullptr;
 }
 
+Rect ScalingSession::SourceRect() const noexcept {
+	if (!_frameSource) {
+		return {};
+	}
+	const Rect& srcRect = _frameSource->SrcRect();
+	return {
+		_virtualOutputRect.left + srcRect.left, _virtualOutputRect.top + srcRect.top,
+		_virtualOutputRect.left + srcRect.right, _virtualOutputRect.top + srcRect.bottom
+	};
+}
+
+Rect ScalingSession::DestinationRect() const noexcept {
+	if (!_chain) {
+		return {};
+	}
+	const Rect destRect = _DestRect();
+	return {
+		_rendererRect.left + destRect.left, _rendererRect.top + destRect.top,
+		_rendererRect.left + destRect.right, _rendererRect.top + destRect.bottom
+	};
+}
+
 std::string ScalingSession::Describe() const noexcept {
 	if (!_frameSource || !_chain) {
 		return "nothing";
 	}
 
+	std::string where;
+	if (_options.IsWindowedMode()) {
+		where = fmt::format("in a window of {}x{}", _rendererRect.Width(), _rendererRect.Height());
+	} else {
+		for (const OutputInfo& monitor : _monitors) {
+			where += (where.empty() ? "on " : ", ") + monitor.name;
+		}
+	}
+
 	const Rect& srcRect = _frameSource->SrcRect();
 	const Texture& output = *_chain->Output();
-	return fmt::format("{}x{} on {} ({:.2f} Hz) to {}x{} on {}; stream: {}",
-		srcRect.Width(), srcRect.Height(), _virtualOutputName, _output.refreshRate / 1000.0,
-		output.width, output.height, _output.name, _frameSource->DescribeFormat());
+	return fmt::format("{}x{} on {} ({:.2f} Hz) to {}x{} {}; stream: {}",
+		srcRect.Width(), srcRect.Height(), _virtualOutputName, _refreshRate / 1000.0,
+		output.width, output.height, where, _frameSource->DescribeFormat());
 }
 
 }

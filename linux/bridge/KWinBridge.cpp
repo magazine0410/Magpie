@@ -699,6 +699,30 @@ for (const w of workspace.windowList()) {{
 	}
 }
 
+bool KWinBridge::SetWindowProperties(const std::string& windowId, const WindowProperties& properties) noexcept {
+	std::string body;
+	const auto assign = [&](const char* name, const std::optional<bool>& value) {
+		if (value) {
+			body += fmt::format("\t\tw.{} = {};\n", name, *value ? "true" : "false");
+		}
+	};
+	assign("keepAbove", properties.keepAbove);
+	assign("minimized", properties.minimized);
+	assign("skipTaskbar", properties.skipTaskbar);
+	assign("skipSwitcher", properties.skipTaskbar);
+	assign("skipPager", properties.skipTaskbar);
+	if (properties.raise) {
+		body += "\t\tworkspace.raiseWindow(w);\n";
+	}
+
+	return _RunScript(fmt::format(R"(
+for (const w of workspace.windowList()) {{
+	if (w.internalId.toString() === "{}") {{
+{}	}}
+}}
+)", windowId, body));
+}
+
 bool KWinBridge::MovePointer(Point position) noexcept {
 	if (!_connection || !_connection->fakeInput) {
 		Logger::Get().Error("KWin's fake input interface is not available");

@@ -1,4 +1,6 @@
 #include "ScalingGeometry.h"
+#include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace Magpie {
@@ -98,5 +100,106 @@ Point ScalingGeometry::ScalingToSrc(Point pt, const Rect& srcRect, const Rect& d
 
 	return result;
 }
+
+bool ScalingGeometry::CalcWindowedRendererSize(
+	int32_t& width,
+	int32_t& height,
+	Size srcSize,
+	Size minSize,
+	Size maxSize
+) noexcept {
+	assert((width == 0) != (height == 0));
+
+	const float srcAspectRatio = (float)srcSize.height / (float)srcSize.width;
+
+	if (width != 0) {
+		height = (int32_t)std::lround((float)width * srcAspectRatio);
+	} else {
+		width = (int32_t)std::lround((float)height / srcAspectRatio);
+	}
+
+	// Not smaller than the minimum
+	if (width > height) {
+		if (height < minSize.height) {
+			height = minSize.height;
+			width = (int32_t)std::lround((float)height / srcAspectRatio);
+		}
+	} else {
+		if (width < minSize.width) {
+			width = minSize.width;
+			height = (int32_t)std::lround((float)width * srcAspectRatio);
+		}
+	}
+
+	if (width > maxSize.width || height > maxSize.height) {
+		// The largest width if the height fits then, otherwise the largest height
+		const int32_t testHeight = (int32_t)std::lround((float)maxSize.width * srcAspectRatio);
+		if (testHeight <= maxSize.height) {
+			width = maxSize.width;
+			height = testHeight;
+		} else {
+			height = maxSize.height;
+			width = (int32_t)std::lround((float)maxSize.height / srcAspectRatio);
+		}
+
+		if (width > height ? height < minSize.height : width < minSize.width) {
+			// The source is too large
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool ScalingGeometry::CalcInitialWindowedRendererSize(
+	Size& size,
+	Size srcSize,
+	Size monitorSize,
+	float initialScaleFactor,
+	int32_t lastWidth,
+	Size minSize,
+	Size maxSize
+) noexcept {
+	size = {};
+	if (lastWidth != 0) {
+		// The size of the last windowed scaling
+		size.width = lastWidth;
+	} else if (initialScaleFactor < 1.0f) {
+		// Three quarters of the monitor, and at least a third larger than the source
+		const float srcAspectRatio = (float)srcSize.height / (float)srcSize.width;
+		if ((float)monitorSize.height / (float)monitorSize.width > srcAspectRatio) {
+			size.width = std::max(monitorSize.width * 3 / 4, srcSize.width * 4 / 3);
+		} else {
+			size.height = std::max(monitorSize.height * 3 / 4, srcSize.height * 4 / 3);
+		}
+	} else {
+		size.width = (int32_t)std::lround((float)srcSize.width * initialScaleFactor);
+	}
+
+	return CalcWindowedRendererSize(size.width, size.height, srcSize, minSize, maxSize);
+}
+
+Size ScalingGeometry::CalcResizedWindowedRendererSize(
+	Size proposed,
+	Size current,
+	Size srcSize,
+	Size minSize,
+	Size maxSize
+) noexcept {
+	const float widthChange = std::abs((float)(proposed.width - current.width)) / (float)current.width;
+	const float heightChange = std::abs((float)(proposed.height - current.height)) / (float)current.height;
+
+	Size result{};
+	if (widthChange >= heightChange) {
+		result.width = proposed.width;
+	} else {
+		result.height = proposed.height;
+	}
+	if (!CalcWindowedRendererSize(result.width, result.height, srcSize, minSize, maxSize)) {
+		return current;
+	}
+	return result;
+}
+
 
 }

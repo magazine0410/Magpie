@@ -17,7 +17,9 @@ static void PrintUsage() {
 		"                   fullscreen, or stop if a window is scaled\n"
 		"  scale QUERY      scale this window: a window id, an app ID or a part of a\n"
 		"                   title, as magpie-viewer --list-windows prints them\n"
+		"  window [QUERY]   the same into a window that can be moved and resized\n"
 		"  stop             stop scaling\n"
+		"  screenshot       save the scaled picture to the screenshots directory\n"
 		"  status           print \"idle\", \"scaling\" or \"waiting\"\n"
 		"\n"
 		"Exit status: 0 on success, 1 if magpie-engine is not running or refused.");
@@ -44,9 +46,15 @@ int main(int argc, char* argv[]) {
 	int result;
 	if (command == "scale" && argc == 2) {
 		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "Scale", &error, nullptr, "");
-	} else if (command == "scale") {
+	} else if (command == "window" && argc == 2) {
+		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "ScaleWindowed",
+			&error, nullptr, "");
+	} else if (command == "scale" || command == "window") {
 		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "ScaleWindow",
-			&error, nullptr, "s", argv[2]);
+			&error, nullptr, "sb", argv[2], (int)(command == "window"));
+	} else if (command == "screenshot" && argc == 2) {
+		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "TakeScreenshot",
+			&error, nullptr, "");
 	} else if (command == "stop" && argc == 2) {
 		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "Stop", &error, nullptr, "");
 	} else if (command == "status" && argc == 2) {

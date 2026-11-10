@@ -28,10 +28,10 @@ static void PrintUsage() {
 	std::puts(
 		"Usage: magpie-scale (--window QUERY | --active) [options]\n"
 		"\n"
-		"Scales a window to the whole monitor it is on. While it is scaled the window\n"
-		"is on a virtual monitor; mouse and keyboard act on it through the scaled\n"
-		"picture. Ctrl+C in the terminal, or SIGTERM, ends scaling and puts the\n"
-		"window back.\n"
+		"Scales a window to the whole monitor it is on, or into a larger window.\n"
+		"While it is scaled the window is on a virtual monitor; mouse and keyboard\n"
+		"act on it through the scaled picture. Ctrl+C in the terminal, or SIGTERM,\n"
+		"ends scaling and puts the window back.\n"
 		"\n"
 		"Source:\n"
 		"  --window QUERY     a window id, an app ID or a part of a title, as\n"
@@ -43,6 +43,15 @@ static void PrintUsage() {
 		"  --title-bar        keep the title bar that the desktop draws; it is part\n"
 		"                     of the picture then\n"
 		"  --allow-maximized  also scale a maximized or fullscreen window\n"
+		"\n"
+		"Where the picture goes:\n"
+		"  --windowed         into a window that can be moved and resized\n"
+		"  --window-scale F   the size that window starts with, as a multiple of the\n"
+		"                     source (default: three quarters of the monitor)\n"
+		"  --monitors WHICH   closest (default): the monitor the window is on;\n"
+		"                     intersected: all monitors the window touches; all\n"
+		"  --3d               3D game mode: the pointer stays with the source\n"
+		"  --no-topmost       do not keep the picture above everything else\n"
 		"\n"
 		"Effects:\n"
 		"  --effect SPEC      add an effect; may be given several times. Without\n"
@@ -92,6 +101,7 @@ static const char* Describe(ScalingSession::EndReason reason) {
 	case SourceResized: return "the source window changed its size";
 	case SourceMoved: return "the source window was moved";
 	case FocusLost: return "another window on the same monitor became active";
+	case WindowClosed: return "the window with the picture was closed";
 	case CaptureFailed: return "capturing failed";
 	case Failed: return "of an error";
 	default: return "it was asked to";
@@ -103,6 +113,8 @@ static const char* Describe(ScalingError error) {
 	case ScalingError::InvalidScalingMode: return "the scaling mode has no effects";
 	case ScalingError::InvalidSourceWindow: return "the window cannot be scaled";
 	case ScalingError::Maximized: return "the window is maximized or fullscreen";
+	case ScalingError::BannedInWindowedMode: return "a maximized or fullscreen window cannot be scaled into a window";
+	case ScalingError::Windowed3DGameMode: return "3D game mode cannot be combined with windowed scaling";
 	case ScalingError::InvalidCropping: return "too little of the window is left after cropping";
 	case ScalingError::CaptureFailed: return "capturing failed";
 	default: return "scaling could not be set up";
@@ -173,6 +185,25 @@ int main(int argc, char* argv[]) {
 			if (!ParseCropping(text, options.cropping)) {
 				invalid(text);
 			}
+		} else if (arg == "--windowed") {
+			options.IsWindowedMode(true);
+		} else if (arg == "--window-scale") {
+			options.initialWindowedScaleFactor = number(1.0f);
+		} else if (arg == "--monitors") {
+			const std::string_view which = value();
+			if (which == "closest") {
+				options.multiMonitorUsage = MultiMonitorUsage::Closest;
+			} else if (which == "intersected") {
+				options.multiMonitorUsage = MultiMonitorUsage::Intersected;
+			} else if (which == "all") {
+				options.multiMonitorUsage = MultiMonitorUsage::All;
+			} else {
+				invalid(which.data());
+			}
+		} else if (arg == "--3d") {
+			options.Is3DGameMode(true);
+		} else if (arg == "--no-topmost") {
+			options.IsTopmostDisabled(true);
 		} else if (arg == "--title-bar") {
 			options.IsCaptureTitleBar(true);
 		} else if (arg == "--allow-maximized") {
@@ -356,7 +387,7 @@ int main(int argc, char* argv[]) {
 	std::printf("Frames:  %llu scaled (%.1f per second), %llu presented (%.1f per second)\n",
 		(unsigned long long)statistics.scaledFrames, statistics.scaledFrames / runTime,
 		(unsigned long long)statistics.presentedFrames, statistics.presentedFrames / runTime);
-	std::printf("Pointer: sent to the source %u times, to another monitor %u times\n",
+	std::printf("Pointer: sent to the source %u times, away from it %u times\n",
 		statistics.pointerCaptures, statistics.pointerReleases);
 	return failed ? 1 : 0;
 }

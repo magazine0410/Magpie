@@ -12,8 +12,10 @@ pkg_get_variable(WLR_PROTOCOLS_DIR wlr-protocols pkgdatadir)
 set(GENERATED)
 foreach(xml IN ITEMS
 	${WLR_PROTOCOLS_DIR}/unstable/wlr-layer-shell-unstable-v1.xml
-	# The layer shell refers to its popups
+	# The layer shell refers to its popups; the scaled window of windowed mode
 	${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml
+	# Title bar and borders from the desktop
+	${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)
@@ -28,9 +30,9 @@ foreach(xml IN ITEMS
 endforeach()
 
 add_library(magpie_engine STATIC
-	LayerSurface.cpp
 	PipeWireFrameSource.cpp
 	ScalingSession.cpp
+	ScalingSurface.cpp
 	${GENERATED}
 )
 

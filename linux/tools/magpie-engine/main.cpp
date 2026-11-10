@@ -1,6 +1,6 @@
 // magpie-engine: the scaling engine as a service of the session. It waits
 // for a global shortcut or a call on D-Bus and then scales the active window
-// to fullscreen, with the scaling mode of the default profile.
+// to fullscreen or into a window, with the options of the default profile.
 //
 // Linux counterpart of ScalingService and ScalingRuntime (src/Magpie and
 // src/Magpie.Core) without the user interface. One thread does everything:
@@ -36,9 +36,10 @@ static void PrintUsage() {
 	std::puts(
 		"Usage: magpie-engine [options]\n"
 		"\n"
-		"Runs until it is ended with Ctrl+C or SIGTERM. The shortcut for scaling is\n"
-		"registered with the desktop, which asks for confirmation the first time and\n"
-		"lists it in its shortcut settings. magpie-ctl sends the same commands.\n"
+		"Runs until it is ended with Ctrl+C or SIGTERM. The shortcuts for scaling,\n"
+		"windowed scaling and screenshots are registered with the desktop, which asks\n"
+		"for confirmation the first time and lists them in its shortcut settings.\n"
+		"magpie-ctl sends the same commands.\n"
 		"\n"
 		"Options:\n"
 		"  --config FILE      config.json to use (default: Magpie's own)\n"
@@ -69,11 +70,14 @@ const char* Name(State state) {
 
 enum class Command {
 	None,
-	// What the shortcut does: stop if a window is scaled, otherwise scale
-	// the active window
+	// What the shortcuts do: scale the active window to fullscreen or into
+	// a window; stop if a window is scaled that way already, and change the
+	// way if it is scaled the other way. As ScalingWindow::ToggleScaling.
 	Toggle,
+	ToggleWindowed,
 	ScaleWindow,
-	Stop
+	Stop,
+	Screenshot
 };
 
 struct Engine {
@@ -88,8 +92,16 @@ struct Engine {
 	sd_bus* bus = nullptr;
 	std::unique_ptr<ScalingSession> session;
 	State state = State::Idle;
-	// The window that is scaled or waited for
+	// The window that is scaled or waited for, and how it is scaled
 	std::string windowId;
+	bool isWindowedMode = false;
+	// The width the user gave the window of windowed scaling; the next one
+	// starts with it, as on Windows while the program runs
+	int32_t lastWindowedWidth = 0;
+	// What the properties on D-Bus last said
+	bool announcedSourceActive = false;
+	Rect announcedSourceRect{};
+	Rect announcedDestinationRect{};
 	// While waiting: the window as last seen, and since when it is like that
 	WindowInfo waitingInfo;
 	std::chrono::steady_clock::time_point stableSince;
@@ -97,6 +109,7 @@ struct Engine {
 	// Set by D-Bus calls and shortcuts, carried out by the main loop
 	Command command = Command::None;
 	std::string commandArgument;
+	bool commandWindowed = false;
 
 	void SetState(State newState) {
 		if (state == newState) {
@@ -105,12 +118,32 @@ struct Engine {
 		state = newState;
 		Logger::Get().Info(std::string("State: ") + Name(state));
 		sd_bus_emit_signal(bus, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "StateChanged", "s", Name(state));
-		sd_bus_emit_properties_changed(bus, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "State", nullptr);
+		sd_bus_emit_properties_changed(bus, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID,
+			"State", "Windowed", "SourceWindow", nullptr);
+	}
+
+	// Tells listeners on D-Bus what changed while scaling: whether the
+	// source is the active window, and where the picture is. Counterpart of
+	// the events 0 to 2 of the MagpieScalingChanged message.
+	void AnnounceChanges() {
+		const bool sourceActive = session && session->IsSourceActive();
+		const Rect sourceRect = session ? session->SourceRect() : Rect{};
+		const Rect destinationRect = session ? session->DestinationRect() : Rect{};
+		if (sourceActive != announcedSourceActive) {
+			announcedSourceActive = sourceActive;
+			sd_bus_emit_properties_changed(bus, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "SourceActive", nullptr);
+		}
+		if (sourceRect != announcedSourceRect || destinationRect != announcedDestinationRect) {
+			announcedSourceRect = sourceRect;
+			announcedDestinationRect = destinationRect;
+			sd_bus_emit_properties_changed(bus, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID,
+				"SourceRect", "DestinationRect", nullptr);
+		}
 	}
 
 	// The options of the default profile. Read anew for every start, so that
 	// a change of the configuration applies without a restart.
-	bool LoadOptions(ScalingOptions& options) {
+	bool LoadOptions(bool windowed, ScalingOptions& options) {
 		Settings settings;
 		if (configFile) {
 			std::ifstream file(configFile, std::ios::binary);
@@ -135,7 +168,12 @@ struct Engine {
 			}
 		}
 
-		if (BuildScalingOptions(settings, profile, false, options) != ScalingError::NoError) {
+		const ScalingError error = BuildScalingOptions(settings, profile, windowed, options);
+		if (error == ScalingError::Windowed3DGameMode) {
+			Logger::Get().Error("3D game mode cannot be combined with windowed scaling");
+			return false;
+		}
+		if (error != ScalingError::NoError) {
 			Logger::Get().Error("The scaling mode does not exist or has no effects");
 			return false;
 		}
@@ -145,16 +183,24 @@ struct Engine {
 		return true;
 	}
 
-	bool StartScaling(const std::string& id) {
+	void EndSession() {
+		if (!session) {
+			return;
+		}
+		session->Stop();
+		if (session->IsWindowedMode() && session->WindowedWidth() > 0) {
+			lastWindowedWidth = session->WindowedWidth();
+		}
+		session.reset();
+	}
+
+	bool StartScaling(const std::string& id, bool windowed) {
 		// Not StopScaling: the state goes from what it is to "scaling"
 		// without "idle" in between
-		if (session) {
-			session->Stop();
-			session.reset();
-		}
+		EndSession();
 
 		ScalingOptions options;
-		if (!LoadOptions(options)) {
+		if (!LoadOptions(windowed, options)) {
 			SetState(State::Idle);
 			return false;
 		}
@@ -164,7 +210,8 @@ struct Engine {
 			.effectsDir = effectsDir,
 			.stateFile = Paths::StateDir() / "scaling-state",
 			.validation = validation,
-			.appId = MAGPIE_APP_ID
+			.appId = MAGPIE_APP_ID,
+			.lastWindowedWidth = lastWindowedWidth
 		});
 		if (error != ScalingError::NoError) {
 			Logger::Get().Error("Scaling did not start (error " + std::to_string((int)error) + ")");
@@ -174,15 +221,18 @@ struct Engine {
 		}
 
 		windowId = id;
+		isWindowedMode = windowed;
+		if (state == State::Scaling) {
+			// From one way of scaling to the other
+			sd_bus_emit_properties_changed(bus, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID,
+				"Windowed", "SourceWindow", nullptr);
+		}
 		SetState(State::Scaling);
 		return true;
 	}
 
 	void StopScaling() {
-		if (session) {
-			session->Stop();
-			session.reset();
-		}
+		EndSession();
 		SetState(State::Idle);
 	}
 
@@ -191,8 +241,7 @@ struct Engine {
 	void OnSessionEnded() {
 		const ScalingSession::EndReason reason = session->GetEndReason();
 		Logger::Get().Info("The scaling session ended (reason " + std::to_string((int)reason) + ")");
-		session->Stop();
-		session.reset();
+		EndSession();
 
 		if (reason == ScalingSession::EndReason::SourceResized ||
 			reason == ScalingSession::EndReason::SourceMinimized) {
@@ -221,7 +270,7 @@ struct Engine {
 			waitingInfo = info;
 			stableSince = now;
 		} else if (now - stableSince >= SETTLE_TIME) {
-			StartScaling(windowId);
+			StartScaling(windowId, isWindowedMode);
 		}
 	}
 
@@ -229,9 +278,24 @@ struct Engine {
 		const Command current = command;
 		command = Command::None;
 
-		if (current == Command::Stop || (current == Command::Toggle && state == State::Scaling)) {
+		if (current == Command::Stop) {
 			StopScaling();
-		} else if (current == Command::Toggle) {
+		} else if (current == Command::Screenshot) {
+			if (!session || !session->TakeScreenshot()) {
+				Logger::Get().Warn("No screenshot: no window is scaled");
+			}
+		} else if (current == Command::Toggle || current == Command::ToggleWindowed) {
+			const bool windowed = current == Command::ToggleWindowed;
+			if (state == State::Scaling) {
+				if (session->IsWindowedMode() == windowed || !session->IsSourceActive()) {
+					StopScaling();
+				} else {
+					// The other way of scaling for the same window
+					StartScaling(std::string(windowId), windowed);
+				}
+				return;
+			}
+
 			// Also ends a wait for a minimized source
 			bridge.ListWindows();
 			const std::string active = bridge.ActiveWindowId();
@@ -244,13 +308,13 @@ struct Engine {
 				// WindowHelper::IsForbiddenSystemWindow
 				SetState(State::Idle);
 			} else {
-				StartScaling(active);
+				StartScaling(active, windowed);
 			}
 		} else if (current == Command::ScaleWindow) {
 			const std::vector<WindowInfo> windows = bridge.ListWindows();
 			const std::vector<const WindowInfo*> found = FindWindows(windows, commandArgument);
 			if (found.size() == 1) {
-				StartScaling(found[0]->id);
+				StartScaling(found[0]->id, commandWindowed);
 			} else {
 				Logger::Get().Error(fmt::format("\"{}\" matches {} windows", commandArgument, found.size()));
 			}
@@ -263,15 +327,27 @@ int OnScale(sd_bus_message* message, void* userData, sd_bus_error*) {
 	return sd_bus_reply_method_return(message, "");
 }
 
+int OnScaleWindowed(sd_bus_message* message, void* userData, sd_bus_error*) {
+	((Engine*)userData)->command = Command::ToggleWindowed;
+	return sd_bus_reply_method_return(message, "");
+}
+
 int OnScaleWindow(sd_bus_message* message, void* userData, sd_bus_error*) {
 	Engine& engine = *(Engine*)userData;
 	const char* query = nullptr;
-	const int result = sd_bus_message_read(message, "s", &query);
+	int windowed = 0;
+	const int result = sd_bus_message_read(message, "sb", &query, &windowed);
 	if (result < 0) {
 		return result;
 	}
 	engine.command = Command::ScaleWindow;
 	engine.commandArgument = query;
+	engine.commandWindowed = windowed != 0;
+	return sd_bus_reply_method_return(message, "");
+}
+
+int OnTakeScreenshot(sd_bus_message* message, void* userData, sd_bus_error*) {
+	((Engine*)userData)->command = Command::Screenshot;
 	return sd_bus_reply_method_return(message, "");
 }
 
@@ -284,15 +360,58 @@ int GetState(sd_bus*, const char*, const char*, const char*, sd_bus_message* rep
 	return sd_bus_message_append(reply, "s", Name(((Engine*)userData)->state));
 }
 
+int GetWindowed(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
+	const Engine& engine = *(Engine*)userData;
+	return sd_bus_message_append(reply, "b", (int)(engine.state != State::Idle && engine.isWindowedMode));
+}
+
+int GetSourceWindow(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
+	const Engine& engine = *(Engine*)userData;
+	return sd_bus_message_append(reply, "s", engine.state != State::Idle ? engine.windowId.c_str() : "");
+}
+
+int GetSourceActive(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
+	const Engine& engine = *(Engine*)userData;
+	return sd_bus_message_append(reply, "b", (int)(engine.session && engine.session->IsSourceActive()));
+}
+
+int AppendRect(sd_bus_message* reply, const Rect& rect) {
+	return sd_bus_message_append(reply, "(iiii)", rect.left, rect.top, rect.right, rect.bottom);
+}
+
+int GetSourceRect(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
+	const Engine& engine = *(Engine*)userData;
+	return AppendRect(reply, engine.session ? engine.session->SourceRect() : Rect{});
+}
+
+int GetDestinationRect(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
+	const Engine& engine = *(Engine*)userData;
+	return AppendRect(reply, engine.session ? engine.session->DestinationRect() : Rect{});
+}
+
+// The counterpart of the MagpieScalingChanged message and of the window
+// properties that "docs/Interact with Magpie programally.md" describes
 const sd_bus_vtable VTABLE[]{
 	SD_BUS_VTABLE_START(0),
-	// The action of the shortcut
+	// The actions of the shortcuts
 	SD_BUS_METHOD("Scale", "", "", OnScale, SD_BUS_VTABLE_UNPRIVILEGED),
-	// A window id, an app ID or a part of a title
-	SD_BUS_METHOD("ScaleWindow", "s", "", OnScaleWindow, SD_BUS_VTABLE_UNPRIVILEGED),
+	SD_BUS_METHOD("ScaleWindowed", "", "", OnScaleWindowed, SD_BUS_VTABLE_UNPRIVILEGED),
+	SD_BUS_METHOD("TakeScreenshot", "", "", OnTakeScreenshot, SD_BUS_VTABLE_UNPRIVILEGED),
+	// A window id, an app ID or a part of a title; and whether into a window
+	SD_BUS_METHOD("ScaleWindow", "sb", "", OnScaleWindow, SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("Stop", "", "", OnStop, SD_BUS_VTABLE_UNPRIVILEGED),
 	// "idle", "scaling" or "waiting"
 	SD_BUS_PROPERTY("State", "s", GetState, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	// The window that is scaled or waited for, as the desktop identifies
+	// it, and whether it is scaled into a window
+	SD_BUS_PROPERTY("SourceWindow", "s", GetSourceWindow, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("Windowed", "b", GetWindowed, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	// The source is the active window
+	SD_BUS_PROPERTY("SourceActive", "b", GetSourceActive, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	// Left, top, right and bottom in desktop coordinates: the part of the
+	// source that is scaled, where it is while it is scaled, and its picture
+	SD_BUS_PROPERTY("SourceRect", "(iiii)", GetSourceRect, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("DestinationRect", "(iiii)", GetDestinationRect, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 	SD_BUS_SIGNAL("StateChanged", "s", 0),
 	SD_BUS_VTABLE_END
 };
@@ -366,11 +485,23 @@ int main(int argc, char* argv[]) {
 	if (useShortcuts) {
 		Settings settings;
 		SettingsStore::Load(settings);
-		const PortalShortcuts::Shortcut wanted[]{ {
-			"scale",
-			"Scale the active window to fullscreen, or stop scaling",
-			ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::Scale])
-		} };
+		const PortalShortcuts::Shortcut wanted[]{
+			{
+				"scale",
+				"Scale the active window to fullscreen, or stop scaling",
+				ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::Scale])
+			},
+			{
+				"scale-windowed",
+				"Scale the active window into a window, or stop scaling",
+				ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::WindowedModeScale])
+			},
+			{
+				"screenshot",
+				"Save a screenshot of the scaled picture",
+				ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::TakeScreenshot])
+			}
+		};
 		if (shortcuts.Initialize(engine.bus, MAGPIE_APP_ID, wanted)) {
 			for (const auto& [id, trigger] : shortcuts.Bound()) {
 				std::printf("Shortcut \"%s\": %s\n", id.c_str(), trigger.empty() ? "no key assigned" : trigger.c_str());
@@ -410,6 +541,10 @@ int main(int argc, char* argv[]) {
 		for (const std::string& id : shortcuts.TakeActivated()) {
 			if (id == "scale") {
 				engine.command = Command::Toggle;
+			} else if (id == "scale-windowed") {
+				engine.command = Command::ToggleWindowed;
+			} else if (id == "screenshot") {
+				engine.command = Command::Screenshot;
 			}
 		}
 
@@ -423,6 +558,7 @@ int main(int argc, char* argv[]) {
 			if (engine.state == State::Waiting) {
 				engine.CheckWaiting();
 			}
+			engine.AnnounceChanges();
 		}
 		sd_bus_flush(engine.bus);
 	}

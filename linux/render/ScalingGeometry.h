@@ -36,6 +36,48 @@ struct ScalingGeometry {
 		bool skipBorder
 	) noexcept;
 
+	// The size of the picture of windowed scaling. One of `width` and
+	// `height` is the wanted value and the other is zero; on return both are
+	// set, with the aspect ratio of the source. The picture is at least
+	// `minSize` in the direction in which it is smaller and at most `maxSize`
+	// in both. Returns false if the two limits cannot both be kept, which
+	// means that the source is too large. Port of
+	// ScalingWindow::_CalcWindowedScalingWindowSize, without the frame of the
+	// window, which the desktop draws here.
+	static bool CalcWindowedRendererSize(
+		int32_t& width,
+		int32_t& height,
+		Size srcSize,
+		Size minSize,
+		Size maxSize
+	) noexcept;
+
+	// The size the picture of windowed scaling starts with. `lastWidth` is
+	// the width of the last windowed scaling, or zero. Without it a scale
+	// factor of one or more gives that multiple of the source, and a smaller
+	// one three quarters of the monitor but at least four thirds of the
+	// source, as ScalingWindow::_StartImpl does.
+	static bool CalcInitialWindowedRendererSize(
+		Size& size,
+		Size srcSize,
+		Size monitorSize,
+		float initialScaleFactor,
+		int32_t lastWidth,
+		Size minSize,
+		Size maxSize
+	) noexcept;
+
+	// The size for a window that the user resizes, from the size the desktop
+	// proposes: the direction in which the proposal differs more from the
+	// current size is followed and the other is computed.
+	static Size CalcResizedWindowedRendererSize(
+		Size proposed,
+		Size current,
+		Size srcSize,
+		Size minSize,
+		Size maxSize
+	) noexcept;
+
 	// The reverse: which point of the source a point of the scaled picture
 	// shows. Counterpart of ScalingToSrc in CursorManager.cpp, with rounding
 	// to the nearest pixel. Outside the destination the distance is kept.
