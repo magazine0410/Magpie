@@ -23,7 +23,7 @@ endif()
 
 # The texts: one .qm file per language, made from the .resw files of the
 # Windows user interface and from the texts that only this application has.
-set(WINDOWS_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../src/Magpie")
+get_filename_component(WINDOWS_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../src/Magpie" ABSOLUTE)
 set(TRANSLATIONS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/translations")
 set(ENGLISH_SOURCES
 	"${WINDOWS_UI_DIR}/Resources.language-en-US.resw"
