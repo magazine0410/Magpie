@@ -9,6 +9,8 @@ on:
         '.github/workflows/linux.yml',
         'linux/**',
         'src/Effects/**',
+        'src/Magpie/Resources.language-*.resw',
+        'src/Magpie/Icons/**',
       ]
   pull_request:
     paths:
@@ -16,6 +18,8 @@ on:
         '.github/workflows/linux.yml',
         'linux/**',
         'src/Effects/**',
+        'src/Magpie/Resources.language-*.resw',
+        'src/Magpie/Icons/**',
       ]
 
 jobs:
@@ -38,6 +42,7 @@ jobs:
           pipewire-devel systemd-devel plasma-wayland-protocols-devel wlr-protocols-devel
           fontconfig-devel dejavu-sans-fonts
           mesa-vulkan-drivers vulkan-validation-layers
+          qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qttools-devel qt6-linguist qt6-qtsvg python3
 
       - uses: actions/checkout@v4
 
@@ -53,6 +58,8 @@ jobs:
       # implementation of mesa-vulkan-drivers. The capture tests among them
       # need a PipeWire session, which the container does not have, and skip
       # themselves.
+      # The tests of the settings application (label "app") load its window
+      # with Qt's platform "offscreen", which needs no display.
       # The test labelled "slow" compiles every effect in six combinations.
       # The compiler is the same binary in both build types, so once is enough.
       - name: Test

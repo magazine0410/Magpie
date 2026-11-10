@@ -1,4 +1,5 @@
-// magpie-ctl: sends a command to the running magpie-engine, for scripts and
+// magpie-ctl: sends a command to the running Magpie (the application or the
+// service without a window, magpie-engine), for scripts and
 // for binding keys without the desktop's shortcut portal. Linux counterpart
 // of the window messages described in
 // "docs/Interact with Magpie programally.md".
@@ -24,7 +25,7 @@ static void PrintUsage() {
 		"                   shown when the pointer is near\n"
 		"  status           print \"idle\", \"scaling\" or \"waiting\"\n"
 		"\n"
-		"Exit status: 0 on success, 1 if magpie-engine is not running or refused.");
+		"Exit status: 0 on success, 1 if Magpie is not running or refused.");
 }
 
 int main(int argc, char* argv[]) {
@@ -77,7 +78,7 @@ int main(int argc, char* argv[]) {
 	if (result < 0) {
 		std::fprintf(stderr, "%s\n", sd_bus_error_has_name(&error, SD_BUS_ERROR_SERVICE_UNKNOWN) ||
 			sd_bus_error_has_name(&error, SD_BUS_ERROR_NAME_HAS_NO_OWNER)
-			? "magpie-engine is not running." : (error.message ? error.message : std::strerror(-result)));
+			? "Magpie is not running." : (error.message ? error.message : std::strerror(-result)));
 	}
 	sd_bus_error_free(&error);
 	sd_bus_flush_close_unref(bus);

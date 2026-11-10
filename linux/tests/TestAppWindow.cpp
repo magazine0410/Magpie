@@ -10,6 +10,7 @@
 #include <QTest>
 #include "AppTestHelpers.h"
 #include "Application.h"
+#include "Localization.h"
 #include "MainWindow.h"
 #include "RootViewModel.h"
 #include "SettingsStore.h"
@@ -31,14 +32,14 @@ void SavePicture(QQuickWindow* window, const QString& name) {
 }
 
 struct TestWindow {
-	TestWindow() {
+	explicit TestWindow(const char* language = "en-us") {
 		TakeQtWarnings();
 		// Every test starts with the initial settings, and with a window
 		// high enough for a page with an opened scaling mode or profile, so
 		// that what the tests click on is in the window
 		Settings initial;
 		initial.SetInitialSettings();
-		initial.language = "en-us";
+		initial.language = language;
 		initial.mainWindowWidth = 1000;
 		initial.mainWindowHeight = 1200;
 		REQUIRE(SettingsStore::Save(initial));
@@ -107,6 +108,11 @@ struct TestWindow {
 
 	Settings& Data() {
 		return application.Settings().Data();
+	}
+
+	~TestWindow() {
+		// The tests that follow compare English texts
+		Localization::Initialize("en-us");
 	}
 
 	Application application;
@@ -300,3 +306,23 @@ TEST_CASE("The dialog for a new profile says so when there is no window", "[app]
 	CHECK(test.Data().profiles.empty());
 	CheckNoWarnings();
 }
+
+TEST_CASE("The window speaks the language of the settings", "[app]") {
+	const QString english = qtTrId("Root_ScalingModes.Content");
+	REQUIRE(english == "Scaling modes");
+
+	for (const char* language : { "de", "ja", "ar" }) {
+		INFO(language);
+		TestWindow test(language);
+		const QString text = test.Find("navScalingModes")->property("text").toString();
+		CHECK(text == qtTrId("Root_ScalingModes.Content"));
+		CHECK(text != english);
+		// A text that only this application has is English in every language
+		CHECK(test.Find("navSettings")->property("text").toString() == "Settings");
+
+		test.ShowPage("profile:-1");
+		SavePicture(test.window, QString("language-") + language);
+		CheckNoWarnings();
+	}
+}
+

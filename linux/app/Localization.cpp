@@ -1,6 +1,8 @@
 #include "Localization.h"
 #include <algorithm>
+#include <vector>
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QLocale>
 #include <QTranslator>
 #include "Settings.h"
@@ -45,22 +47,37 @@ std::string Localization::BestLanguage(const QStringList& uiLanguages) {
 	return "en-us";
 }
 
+static std::vector<QTranslator*> translators;
+
 static void Install(const std::string& tag) {
 	QTranslator* translator = new QTranslator(QCoreApplication::instance());
 	if (translator->load(QString::fromStdString(":/translations/magpie_" + tag + ".qm"))) {
 		QCoreApplication::installTranslator(translator);
+		translators.push_back(translator);
 	} else {
 		delete translator;
 	}
 }
 
 void Localization::Initialize(const std::string& language) {
+	// A second call replaces the texts of the first
+	for (QTranslator* translator : translators) {
+		QCoreApplication::removeTranslator(translator);
+		delete translator;
+	}
+	translators.clear();
+
 	currentLanguage = IsSupported(language) ? language : BestLanguage(QLocale::system().uiLanguages());
 
 	// The translator that was installed last is asked first
 	Install("en-us");
 	if (currentLanguage != "en-us") {
 		Install(currentLanguage);
+	}
+
+	// Arabic is written from right to left, and the window is laid out so
+	if (qobject_cast<QGuiApplication*>(QCoreApplication::instance())) {
+		QGuiApplication::setLayoutDirection(QLocale(QString::fromStdString(currentLanguage)).textDirection());
 	}
 }
 

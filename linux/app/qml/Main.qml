@@ -28,6 +28,10 @@ ApplicationWindow {
 
     Component.onCompleted: currentPage = "home"
 
+    // A language written from right to left turns the layout around
+    LayoutMirroring.enabled: Application.layoutDirection === Qt.RightToLeft
+    LayoutMirroring.childrenInherit: true
+
     title: "Magpie"
     width: 1000
     height: 720

@@ -48,6 +48,7 @@ bool Application::Initialize(const Options& options) {
 	if (loadResult == SettingsStore::LoadResult::Initial) {
 		// The first start writes the file
 		_settings.Save();
+		_settings.Flush();
 	}
 
 	ApplyTheme();
