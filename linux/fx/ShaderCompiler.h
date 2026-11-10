@@ -21,10 +21,17 @@ struct ShaderCompiler {
 		bool warningsAreErrors = false;
 	};
 
-	// Compiles a compute shader for Vulkan 1.3. `sourceName` only appears in
+	enum class Stage {
+		Compute,
+		Vertex,
+		Pixel
+	};
+
+	// Compiles a shader for Vulkan 1.3. `sourceName` only appears in
 	// messages. Returns false on failure; `messages` receives the compiler's
 	// errors and warnings in both cases. May be called from several threads.
-	static bool CompileComputeShader(
+	static bool CompileShader(
+		Stage stage,
 		std::string_view hlsl,
 		const char* entryPoint,
 		const char* sourceName,
@@ -32,6 +39,17 @@ struct ShaderCompiler {
 		std::vector<uint32_t>& spirv,
 		std::string& messages
 	) noexcept;
+
+	static bool CompileComputeShader(
+		std::string_view hlsl,
+		const char* entryPoint,
+		const char* sourceName,
+		const Options& options,
+		std::vector<uint32_t>& spirv,
+		std::string& messages
+	) noexcept {
+		return CompileShader(Stage::Compute, hlsl, entryPoint, sourceName, options, spirv, messages);
+	}
 
 	// Version and commit of the compiler library, for cache keys. Empty if the
 	// library cannot be queried.

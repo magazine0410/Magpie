@@ -59,7 +59,8 @@ static ThreadCompiler& GetThreadCompiler() noexcept {
 	return instance;
 }
 
-bool ShaderCompiler::CompileComputeShader(
+bool ShaderCompiler::CompileShader(
+	Stage stage,
 	std::string_view hlsl,
 	const char* entryPoint,
 	const char* sourceName,
@@ -73,11 +74,17 @@ bool ShaderCompiler::CompileComputeShader(
 		return false;
 	}
 
+	static constexpr const wchar_t* PROFILES[][2] = {
+		{ L"cs_6_0", L"cs_6_2" },
+		{ L"vs_6_0", L"vs_6_2" },
+		{ L"ps_6_0", L"ps_6_2" }
+	};
+
 	std::vector<std::wstring> args{
 		ToWide(sourceName ? sourceName : "shader.hlsl"),
 		L"-E", ToWide(entryPoint),
 		// 16-bit types need shader model 6.2
-		L"-T", options.nativeFP16 ? L"cs_6_2" : L"cs_6_0",
+		L"-T", PROFILES[(size_t)stage][options.nativeFP16 ? 1 : 0],
 		L"-spirv",
 		L"-fspv-target-env=vulkan1.3",
 		// HLSL 2018 keeps the language rules of the Windows compiler (FXC);

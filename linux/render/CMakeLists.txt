@@ -5,6 +5,7 @@ find_package(muparser REQUIRED)
 find_package(PNG REQUIRED)
 
 add_library(magpie_render STATIC
+	CursorDrawer.cpp
 	DuplicateFrameDetector.cpp
 	EffectChain.cpp
 	EffectDrawer.cpp
