@@ -23,6 +23,8 @@ catch_discover_tests(magpie_tests)
 # The renderer tests need a Vulkan device; a software implementation such as
 # llvmpipe is enough. MAGPIE_TEST_GPUS limits them to some of the devices.
 add_executable(magpie_render_tests
+	RenderTestListener.cpp
+	TestDmabuf.cpp
 	TestDuplicateFrames.cpp
 	TestRenderBasics.cpp
 	TestRenderer.cpp
@@ -38,6 +40,27 @@ target_compile_definitions(magpie_render_tests PRIVATE
 target_compile_options(magpie_render_tests PRIVATE -Wno-missing-field-initializers)
 
 catch_discover_tests(magpie_render_tests PROPERTIES LABELS gpu TIMEOUT 600)
+
+# The capture tests feed the frame source from a PipeWire stream of their own.
+# They need a Vulkan device and a running PipeWire session with a session
+# manager, and skip themselves without the latter.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+
+add_executable(magpie_engine_tests
+	RenderTestListener.cpp
+	TestFrameSource.cpp
+)
+
+target_link_libraries(magpie_engine_tests PRIVATE
+	magpie_engine PkgConfig::PIPEWIRE magpie_warnings Catch2::Catch2WithMain)
+target_compile_definitions(magpie_engine_tests PRIVATE
+	MAGPIE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+	MAGPIE_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"
+)
+target_compile_options(magpie_engine_tests PRIVATE -Wno-missing-field-initializers)
+
+catch_discover_tests(magpie_engine_tests PROPERTIES LABELS gpu TIMEOUT 600)
 
 # Every bundled effect in every combination of FP16 mode and inline parameters.
 # Takes about a minute on a twelve-thread machine.

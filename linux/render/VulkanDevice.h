@@ -116,6 +116,11 @@ public:
 		return _isFP16Supported;
 	}
 
+	// The card has the extensions that ImportDmabuf needs
+	bool IsDmabufImportSupported() const noexcept {
+		return _isDmabufImportSupported;
+	}
+
 	// The format can be sampled with linear filtering and written by a compute shader
 	bool IsFormatSupported(EffectIntermediateTextureFormat format) const noexcept {
 		return !(_unsupportedFormats & (1u << (uint32_t)format));
@@ -140,6 +145,30 @@ public:
 		VkFormat format, uint32_t width, uint32_t height, VkImageUsageFlags usage) noexcept;
 
 	std::unique_ptr<Buffer> CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage) noexcept;
+
+	// The DRM format modifiers with which ImportDmabuf accepts a buffer of
+	// this format. Empty if the card cannot import DMA-BUFs.
+	std::vector<uint64_t> DmabufModifiers(VkFormat format) const noexcept;
+
+	// Makes a texture of a DMA-BUF with one plane, for example a frame of a
+	// screen cast. The descriptor stays with the caller. The texture can only
+	// be copied from (it has no image view), and its content belongs to the
+	// exporter: every use is enclosed by AcquireDmabuf and ReleaseDmabuf.
+	std::shared_ptr<Texture> ImportDmabuf(
+		int fd,
+		VkFormat format,
+		uint32_t width,
+		uint32_t height,
+		uint64_t modifier,
+		uint32_t offset,
+		uint32_t stride
+	) noexcept;
+
+	// Takes an imported texture over from its exporter for copying, with its
+	// current content, and gives it back. Between the two calls the texture is
+	// in VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
+	void AcquireDmabuf(VkCommandBuffer cmd, Texture& texture) const noexcept;
+	void ReleaseDmabuf(VkCommandBuffer cmd, Texture& texture) const noexcept;
 
 	// Records commands with `record`, submits them and waits until the GPU
 	// has executed them.
@@ -169,6 +198,7 @@ private:
 		VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 		uint32_t queueFamily = 0;
 		bool isFP16Supported = false;
+		bool isDmabufImportSupported = false;
 	};
 
 	VkInstance _instance = VK_NULL_HANDLE;
@@ -188,10 +218,14 @@ private:
 	VkPhysicalDeviceMemoryProperties _memoryProperties{};
 	std::map<std::pair<VkFilter, VkSamplerAddressMode>, VkSampler> _samplers;
 
+	// Extension entry point that the loader library does not export
+	PFN_vkGetMemoryFdPropertiesKHR _getMemoryFdProperties = nullptr;
+
 	float _timestampPeriod = 0.0f;
 	uint32_t _unsupportedFormats = 0;
 	uint32_t _validationMessageCount = 0;
 	bool _isFP16Supported = false;
+	bool _isDmabufImportSupported = false;
 };
 
 }

@@ -1,6 +1,9 @@
 #include "VulkanDevice.h"
 #include <algorithm>
+#include <bit>
 #include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 #include <fmt/format.h>
 #include "EffectHelper.h"
 #include "Logger.h"
@@ -16,6 +19,19 @@ namespace Magpie {
 // - robustImageAccess, so that reads and writes outside a texture behave as
 //   on Direct3D (reads give zero, writes are dropped). Effects rely on this.
 // - VK_KHR_swapchain, if presentation is requested
+//
+// Used if present: shaderFloat16, and the four extensions for importing
+// DMA-BUFs (DMABUF_EXTENSIONS below).
+
+static constexpr const char* DMABUF_EXTENSIONS[] = {
+	VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+	VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
+	VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
+	VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME
+};
+
+// An imported DMA-BUF is only copied from
+static constexpr VkImageUsageFlags DMABUF_USAGE = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
 static bool Check(VkResult result, const char* what, const std::source_location& location = std::source_location::current()) noexcept {
 	if (result == VK_SUCCESS) {
@@ -377,18 +393,24 @@ bool VulkanDevice::_FindGraphicsCards(const Options& options) noexcept {
 			}
 		}
 
-		if (!missing && options.presentation) {
+		if (!missing) {
 			uint32_t extensionCount = 0;
 			vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
 			std::vector<VkExtensionProperties> available(extensionCount);
 			vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, available.data());
 
-			const bool found = std::any_of(available.begin(), available.end(), [](const VkExtensionProperties& extension) {
-				return std::strcmp(extension.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0;
-			});
-			if (!found) {
+			const auto has = [&](const char* name) {
+				return std::any_of(available.begin(), available.end(), [&](const VkExtensionProperties& extension) {
+					return std::strcmp(extension.extensionName, name) == 0;
+				});
+			};
+
+			if (options.presentation && !has(VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
 				missing = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 			}
+
+			details.isDmabufImportSupported = std::all_of(
+				std::begin(DMABUF_EXTENSIONS), std::end(DMABUF_EXTENSIONS), has);
 		}
 
 		info.isUsable = !missing;
@@ -407,9 +429,11 @@ bool VulkanDevice::_CreateDevice(const Options& options) noexcept {
 	_physicalDevice = details.physicalDevice;
 	_queueFamily = details.queueFamily;
 	_isFP16Supported = details.isFP16Supported;
+	_isDmabufImportSupported = details.isDmabufImportSupported;
 
-	Logger::Get().Info(fmt::format("Using graphics card {}: {}\n\tFP16: {}",
-		_graphicsCardIdx, _graphicsCards[_graphicsCardIdx].name, _isFP16Supported ? "yes" : "no"));
+	Logger::Get().Info(fmt::format("Using graphics card {}: {}\n\tFP16: {}\n\tDMA-BUF import: {}",
+		_graphicsCardIdx, _graphicsCards[_graphicsCardIdx].name, _isFP16Supported ? "yes" : "no",
+		_isDmabufImportSupported ? "yes" : "no"));
 
 	const float priority = 1.0f;
 	const VkDeviceQueueCreateInfo queueInfo{
@@ -421,7 +445,9 @@ bool VulkanDevice::_CreateDevice(const Options& options) noexcept {
 
 	VkPhysicalDeviceVulkan13Features features13{
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-		.robustImageAccess = VK_TRUE
+		.robustImageAccess = VK_TRUE,
+		// For drawing the cursor. Every Vulkan 1.3 device has it.
+		.dynamicRendering = VK_TRUE
 	};
 	VkPhysicalDeviceVulkan12Features features12{
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
@@ -438,6 +464,9 @@ bool VulkanDevice::_CreateDevice(const Options& options) noexcept {
 	if (options.presentation) {
 		extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 	}
+	if (_isDmabufImportSupported) {
+		extensions.insert(extensions.end(), std::begin(DMABUF_EXTENSIONS), std::end(DMABUF_EXTENSIONS));
+	}
 
 	const VkDeviceCreateInfo deviceInfo{
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -453,6 +482,12 @@ bool VulkanDevice::_CreateDevice(const Options& options) noexcept {
 
 	vkGetDeviceQueue(_device, _queueFamily, 0, &_queue);
 	vkGetPhysicalDeviceMemoryProperties(_physicalDevice, &_memoryProperties);
+
+	if (_isDmabufImportSupported) {
+		_getMemoryFdProperties = (PFN_vkGetMemoryFdPropertiesKHR)
+			vkGetDeviceProcAddr(_device, "vkGetMemoryFdPropertiesKHR");
+		_isDmabufImportSupported = _getMemoryFdProperties != nullptr;
+	}
 
 	{
 		uint32_t familyCount = 0;
@@ -640,6 +675,200 @@ std::unique_ptr<Buffer> VulkanDevice::CreateBuffer(VkDeviceSize size, VkBufferUs
 	}
 
 	return buffer;
+}
+
+std::vector<uint64_t> VulkanDevice::DmabufModifiers(VkFormat format) const noexcept {
+	std::vector<uint64_t> result;
+	if (!_isDmabufImportSupported) {
+		return result;
+	}
+
+	VkDrmFormatModifierPropertiesListEXT list{
+		.sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT
+	};
+	VkFormatProperties2 formatProps{
+		.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
+		.pNext = &list
+	};
+	// The first call returns the count, the second the modifiers
+	vkGetPhysicalDeviceFormatProperties2(_physicalDevice, format, &formatProps);
+	std::vector<VkDrmFormatModifierPropertiesEXT> modifiers(list.drmFormatModifierCount);
+	list.pDrmFormatModifierProperties = modifiers.data();
+	vkGetPhysicalDeviceFormatProperties2(_physicalDevice, format, &formatProps);
+
+	for (const VkDrmFormatModifierPropertiesEXT& modifier : modifiers) {
+		if (modifier.drmFormatModifierPlaneCount != 1) {
+			continue;
+		}
+
+		VkPhysicalDeviceImageDrmFormatModifierInfoEXT modifierInfo{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT,
+			.drmFormatModifier = modifier.drmFormatModifier,
+			.sharingMode = VK_SHARING_MODE_EXCLUSIVE
+		};
+		VkPhysicalDeviceExternalImageFormatInfo externalInfo{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO,
+			.pNext = &modifierInfo,
+			.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
+		};
+		const VkPhysicalDeviceImageFormatInfo2 imageInfo{
+			.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+			.pNext = &externalInfo,
+			.format = format,
+			.type = VK_IMAGE_TYPE_2D,
+			.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+			.usage = DMABUF_USAGE
+		};
+		VkExternalImageFormatProperties externalProps{
+			.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES
+		};
+		VkImageFormatProperties2 imageProps{
+			.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
+			.pNext = &externalProps
+		};
+		if (vkGetPhysicalDeviceImageFormatProperties2(_physicalDevice, &imageInfo, &imageProps) == VK_SUCCESS &&
+			(externalProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT)) {
+			result.push_back(modifier.drmFormatModifier);
+		}
+	}
+
+	return result;
+}
+
+std::shared_ptr<Texture> VulkanDevice::ImportDmabuf(
+	int fd,
+	VkFormat format,
+	uint32_t width,
+	uint32_t height,
+	uint64_t modifier,
+	uint32_t offset,
+	uint32_t stride
+) noexcept {
+	if (!_isDmabufImportSupported) {
+		Logger::Get().Error("The graphics card cannot import DMA-BUFs");
+		return nullptr;
+	}
+
+	auto texture = std::make_shared<Texture>();
+	texture->device = _device;
+	texture->format = format;
+	texture->width = width;
+	texture->height = height;
+
+	const VkSubresourceLayout planeLayout{
+		.offset = offset,
+		.rowPitch = stride
+	};
+	const VkImageDrmFormatModifierExplicitCreateInfoEXT modifierInfo{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+		.drmFormatModifier = modifier,
+		.drmFormatModifierPlaneCount = 1,
+		.pPlaneLayouts = &planeLayout
+	};
+	const VkExternalMemoryImageCreateInfo externalInfo{
+		.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+		.pNext = &modifierInfo,
+		.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT
+	};
+	const VkImageCreateInfo imageInfo{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		.pNext = &externalInfo,
+		.imageType = VK_IMAGE_TYPE_2D,
+		.format = format,
+		.extent = { width, height, 1 },
+		.mipLevels = 1,
+		.arrayLayers = 1,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+		.usage = DMABUF_USAGE,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+	};
+	if (!Check(vkCreateImage(_device, &imageInfo, nullptr, &texture->image), "vkCreateImage")) {
+		return nullptr;
+	}
+
+	VkMemoryFdPropertiesKHR fdProps{ .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR };
+	if (!Check(_getMemoryFdProperties(_device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps),
+		"vkGetMemoryFdPropertiesKHR")) {
+		return nullptr;
+	}
+
+	VkMemoryRequirements requirements;
+	vkGetImageMemoryRequirements(_device, texture->image, &requirements);
+	const uint32_t typeBits = requirements.memoryTypeBits & fdProps.memoryTypeBits;
+	if (typeBits == 0) {
+		Logger::Get().Error("No memory type accepts the DMA-BUF");
+		return nullptr;
+	}
+
+	// Vulkan takes ownership of the descriptor it is given, but only if the
+	// import succeeds
+	const int ownFd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+	if (ownFd < 0) {
+		Logger::Get().Error("Duplicating the DMA-BUF descriptor failed");
+		return nullptr;
+	}
+
+	const VkImportMemoryFdInfoKHR importInfo{
+		.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+		.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+		.fd = ownFd
+	};
+	const VkMemoryDedicatedAllocateInfo dedicatedInfo{
+		.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+		.pNext = &importInfo,
+		.image = texture->image
+	};
+	const VkMemoryAllocateInfo allocInfo{
+		.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+		.pNext = &dedicatedInfo,
+		.allocationSize = requirements.size,
+		.memoryTypeIndex = (uint32_t)std::countr_zero(typeBits)
+	};
+	if (!Check(vkAllocateMemory(_device, &allocInfo, nullptr, &texture->memory), "vkAllocateMemory")) {
+		close(ownFd);
+		return nullptr;
+	}
+	if (!Check(vkBindImageMemory(_device, texture->image, texture->memory, 0), "vkBindImageMemory")) {
+		return nullptr;
+	}
+
+	return texture;
+}
+
+void VulkanDevice::AcquireDmabuf(VkCommandBuffer cmd, Texture& texture) const noexcept {
+	// A new import is in the undefined layout. Its content is kept all the
+	// same, because the transfer from the foreign queue family comes with it;
+	// wlroots and other importers do the same.
+	const VkImageMemoryBarrier barrier{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+		.oldLayout = texture.layout,
+		.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT,
+		.dstQueueFamilyIndex = _queueFamily,
+		.image = texture.image,
+		.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
+	};
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &barrier);
+}
+
+void VulkanDevice::ReleaseDmabuf(VkCommandBuffer cmd, Texture& texture) const noexcept {
+	const VkImageMemoryBarrier barrier{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+		.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		.newLayout = VK_IMAGE_LAYOUT_GENERAL,
+		.srcQueueFamilyIndex = _queueFamily,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT,
+		.image = texture.image,
+		.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
+	};
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &barrier);
+	texture.layout = VK_IMAGE_LAYOUT_GENERAL;
 }
 
 bool VulkanDevice::Execute(const std::function<void(VkCommandBuffer)>& record) noexcept {
