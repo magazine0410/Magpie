@@ -5,10 +5,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
+#include <spdlog/sinks/stdout_sinks.h>
 #include "EffectChain.h"
+#include "Logger.h"
 #include "RenderTestHelpers.h"
+#include "ScalingGeometry.h"
 #include "ScalingMode.h"
 #include "Settings.h"
+#include "Swapchain.h"
 
 using namespace Magpie;
 using namespace RenderTest;
@@ -19,6 +23,11 @@ using namespace RenderTest;
 class DeviceCleanup : public Catch::EventListenerBase {
 public:
 	using Catch::EventListenerBase::EventListenerBase;
+
+	// Shows what the validation layers and the renderer report
+	void testRunStarting(const Catch::TestRunInfo&) override {
+		Logger::Get().InitializeWithSink(spdlog::level::warn, std::make_shared<spdlog::sinks::stderr_sink_mt>());
+	}
 
 	void testRunEnded(const Catch::TestRunStats&) override {
 		TestDevices().clear();
@@ -343,6 +352,67 @@ TEST_CASE("A resized chain renders like a new one", "[render]") {
 		const ImageData fromHalf = draw(chain);
 		CHECK(fromHalf.width == 96);
 		CHECK(Compare(fromHalf, fresh({ 400, 300 }, halfTexture)).maxDiff == 0);
+	});
+}
+
+TEST_CASE("Compose places the output in the frame and converts the channel order", "[render]") {
+	const ImageData input = LoadTestPicture();
+	const Size frameSize{ 150, 100 };
+
+	ForEachDevice([&](VulkanDevice& device, const GraphicsCardInfo&) {
+		// 96x72 placed in 150x100, which leaves bars on all sides for some alignments
+		ImageScaler::Result result;
+		result.output = input;
+
+		const std::shared_ptr<Texture> source = device.CreateTexture(input.format, input.width, input.height,
+			VulkanDevice::EFFECT_TEXTURE_USAGE);
+		REQUIRE(source);
+		REQUIRE(device.UploadTexture(*source, input.pixels, VK_IMAGE_LAYOUT_GENERAL));
+
+		for (const VkFormat targetFormat : { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM }) {
+			for (const OutputAlignment alignment : { OutputAlignment::Center, OutputAlignment::LeftTop, OutputAlignment::RightBottom }) {
+				CAPTURE((int)targetFormat, (int)alignment);
+				result.destRect = ScalingGeometry::CalcDestRect(frameSize, { 96, 72 }, alignment);
+
+				const std::shared_ptr<Texture> target = device.CreateTexture(targetFormat,
+					(uint32_t)frameSize.width, (uint32_t)frameSize.height,
+					VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+				REQUIRE(target);
+				REQUIRE(device.SetInitialLayout(*target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
+				REQUIRE(device.Execute([&](VkCommandBuffer cmd) {
+					Swapchain::Compose(cmd, *source, target->image, frameSize, result.destRect);
+				}));
+
+				ImageData frame;
+				frame.format = VK_FORMAT_R8G8B8A8_UNORM;
+				frame.width = target->width;
+				frame.height = target->height;
+				REQUIRE(device.ReadTexture(*target, frame.pixels));
+				if (targetFormat == VK_FORMAT_B8G8R8A8_UNORM) {
+					// The bytes are blue, green, red; bring them into the order of the reference
+					for (size_t i = 0; i < frame.pixels.size(); i += 4) {
+						std::swap(frame.pixels[i], frame.pixels[i + 2]);
+					}
+				}
+
+				CHECK(Compare(frame, ImageScaler::ComposeFrame(result, frameSize)).maxDiff == 0);
+			}
+		}
+
+		// A source that fills the frame leaves no bars and needs no clearing
+		const std::shared_ptr<Texture> target = device.CreateTexture(VK_FORMAT_R8G8B8A8_UNORM, input.width, input.height,
+			VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+		REQUIRE(target);
+		REQUIRE(device.SetInitialLayout(*target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL));
+		REQUIRE(device.Execute([&](VkCommandBuffer cmd) {
+			Swapchain::Compose(cmd, *source, target->image, { 96, 72 }, { 0, 0, 96, 72 });
+		}));
+		ImageData copy;
+		copy.format = input.format;
+		copy.width = input.width;
+		copy.height = input.height;
+		REQUIRE(device.ReadTexture(*target, copy.pixels));
+		CHECK(Compare(copy, input).maxDiff == 0);
 	});
 }
 

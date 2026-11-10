@@ -33,6 +33,7 @@ set(ENTRIES
 	"src/Magpie.Core/EffectsProfiler.cpp|13292caad4970eb4312ac5d07d1f66901f8ef82c3e0c739b8fa48e3fe3bfa0f8|linux/render/EffectsProfiler.cpp"
 	"src/Magpie.Core/FrameSourceBase.cpp|a6f7d997f7b84bb5b3219bb6b06542c553629a0c43f2d74de9fb77bc72bd9620|linux/render/DuplicateFrameDetector.cpp"
 	"src/Magpie.Core/shaders/DuplicateFrameCS.hlsl|f66d01447c98dc848ae9c70ea723087502101abb57a219bbe1310524f4191c30|linux/render/DuplicateFrameDetector.cpp (DUPLICATE_FRAME_CS)"
+	"src/Magpie.Core/StepTimer.cpp|53eae394dd7fcbd1f7e8d4872a944255cdd422836b78260aa1f400ec51b4e3b7|linux/render/StepTimer.cpp"
 	"src/Magpie.Core/SrcTracker.cpp|ecaeba5806414b1167a9f706a9e9fb1ca6fd2e12dc0ff96418c4df3317f41199|linux/render/ScalingGeometry.cpp (only the cropping at the end of _CalcSrcRect)"
 )
 

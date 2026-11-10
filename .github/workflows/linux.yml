@@ -31,8 +31,11 @@ jobs:
       - name: Install dependencies
         run: >
           dnf -y install
-          git gcc-c++ cmake ninja-build
-          fmt-devel spdlog-devel rapidjson-devel catch-devel vulkan-headers
+          git gcc gcc-c++ cmake ninja-build
+          fmt-devel spdlog-devel rapidjson-devel catch-devel
+          vulkan-headers vulkan-loader-devel muParser-devel libpng-devel
+          wayland-devel wayland-protocols-devel
+          mesa-vulkan-drivers vulkan-validation-layers
 
       - uses: actions/checkout@v4
 
@@ -43,6 +46,8 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      # The renderer tests (label "gpu") run on llvmpipe, the software Vulkan
+      # implementation of mesa-vulkan-drivers.
       # The test labelled "slow" compiles every effect in six combinations.
       # The compiler is the same binary in both build types, so once is enough.
       - name: Test

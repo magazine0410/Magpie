@@ -12,6 +12,8 @@ add_library(magpie_render STATIC
 	ImageFile.cpp
 	ImageScaler.cpp
 	ScalingGeometry.cpp
+	StepTimer.cpp
+	Swapchain.cpp
 	VulkanDevice.cpp
 )
 

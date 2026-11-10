@@ -93,8 +93,11 @@ inline void ForEachDevice(const std::function<void(VulkanDevice&, const Graphics
 }
 
 // On the integrated graphics of the Ryzen 7600X with Mesa 26.2.6, effects
-// that use group-shared memory return wrong pixels in some runs. The cause
-// was not found; the other two devices never showed it. Tests that depend on
+// that use group-shared memory return a few wrong pixels in the first frame
+// that is rendered after the card has been idle for some tens of
+// milliseconds, which is what a test does: it compiles, then renders once.
+// Later frames of the same run were always right, and the other two devices
+// never showed the problem. The cause was not found. Tests that depend on
 // such effects report a warning instead of a failure on this card.
 inline bool HasUnreliableSharedMemory(const GraphicsCardInfo& info) noexcept {
 	return info.vendorId == 0x1002 && info.deviceId == 0x164e;

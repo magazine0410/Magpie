@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
-project(magpie LANGUAGES CXX)
+# C for the code that wayland-scanner generates
+project(magpie LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +35,7 @@ add_subdirectory(fx)
 add_subdirectory(render)
 add_subdirectory(tools/magpie-fxc)
 add_subdirectory(tools/magpie-scale-image)
+add_subdirectory(tools/magpie-present-test)
 
 include(CTest)
 if(BUILD_TESTING)

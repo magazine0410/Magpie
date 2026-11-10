@@ -134,7 +134,8 @@ public:
 	// The sampler is owned by the device
 	VkSampler GetSampler(VkFilter filter, VkSamplerAddressMode addressMode) noexcept;
 
-	// The image starts in VK_IMAGE_LAYOUT_UNDEFINED
+	// The image starts in VK_IMAGE_LAYOUT_UNDEFINED. An image view is created
+	// with it, so `usage` must include sampled or storage.
 	std::shared_ptr<Texture> CreateTexture(
 		VkFormat format, uint32_t width, uint32_t height, VkImageUsageFlags usage) noexcept;
 
