@@ -11,6 +11,7 @@
 #pragma once
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -75,6 +76,12 @@ public:
 		// The file with the icons of the toolbar; without it the buttons
 		// carry text
 		std::filesystem::path iconFontPath;
+		// Tells the user something in passing: that a screenshot was saved,
+		// what state the toolbar has now. Counterpart of the showToast
+		// callback of the Windows options. It is called from the thread
+		// that writes screenshots as well. Without it the messages only go
+		// to the log.
+		std::function<void(const std::string& text)> showMessage;
 		// The width the picture of the last windowed scaling had, to start
 		// with it again; zero: the size comes from the options
 		int32_t lastWindowedWidth = 0;

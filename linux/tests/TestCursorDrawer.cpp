@@ -306,14 +306,32 @@ TEST_CASE("The picture of windowed scaling keeps the aspect ratio of the source"
 	}
 
 	SECTION("while the user resizes the window") {
-		// The right edge was dragged: the height follows
-		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 1000, 600 }, { 800, 600 }, src, min, max) == Size{ 1000, 750 });
-		// The bottom edge was dragged: the width follows
-		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 800, 720 }, { 800, 600 }, src, min, max) == Size{ 960, 720 });
-		// A corner: the direction that changed more
-		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 810, 900 }, { 800, 600 }, src, min, max) == Size{ 1200, 900 });
+		const auto resized = [&](Size proposed, bool width, bool height) {
+			return ScalingGeometry::CalcResizedWindowedRendererSize(proposed, width, height, src, min, max);
+		};
+		// The right edge is dragged: the height follows
+		CHECK(resized({ 1000, 600 }, true, false) == Size{ 1000, 750 });
+		// The bottom edge is dragged: the width follows
+		CHECK(resized({ 800, 720 }, false, true) == Size{ 960, 720 });
+		// A corner: the largest picture inside what is proposed
+		CHECK(resized({ 1000, 900 }, true, true) == Size{ 1000, 750 });
+		CHECK(resized({ 1300, 900 }, true, true) == Size{ 1200, 900 });
+		CHECK(resized({ 700, 300 }, true, true) == Size{ 640, 480 });
 		// Nothing changed
-		CHECK(ScalingGeometry::CalcResizedWindowedRendererSize({ 800, 600 }, { 800, 600 }, src, min, max) == Size{ 800, 600 });
+		CHECK(resized({ 800, 600 }, false, false) == Size{ 800, 600 });
+
+		// Along a drag of a corner the result stays inside the proposal and
+		// follows the mouse without jumping, also where the path crosses
+		// the diagonal and the row it began in
+		Size last{ 800, 600 };
+		for (int32_t i = 1; i <= 300; ++i) {
+			const Size proposed{ 800 + i, 600 + (int32_t)(i * 0.75 + ((i / 20) % 2 ? 9 : -9)) };
+			const Size size = resized(proposed, true, true);
+			CHECK(size.width <= proposed.width);
+			CHECK(size.height <= proposed.height + 1);
+			CHECK(std::abs(size.width - last.width) <= 26);
+			last = size;
+		}
 	}
 }
 

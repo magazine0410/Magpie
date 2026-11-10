@@ -28,6 +28,7 @@ endforeach()
 
 add_library(magpie_bridge STATIC
 	Bridge.cpp
+	DesktopNotification.cpp
 	KWinBridge.cpp
 	KWinPointerSpeed.cpp
 	PortalCapture.cpp

@@ -1,4 +1,6 @@
 #include "PortalShortcuts.h"
+#include <algorithm>
+#include <string_view>
 #include <cstring>
 #include <unistd.h>
 #include <fmt/format.h>
@@ -13,6 +15,7 @@ static constexpr const char* SHORTCUTS_INTERFACE = "org.freedesktop.portal.Globa
 
 PortalShortcuts::~PortalShortcuts() {
 	sd_bus_slot_unref(_activatedSlot);
+	sd_bus_slot_unref(_deactivatedSlot);
 	if (_bus && !_sessionHandle.empty()) {
 		sd_bus_call_method(_bus, PORTAL_NAME, _sessionHandle.c_str(),
 			"org.freedesktop.portal.Session", "Close", nullptr, nullptr, "");
@@ -25,9 +28,39 @@ int PortalShortcuts::_OnActivated(sd_bus_message* message, void* userData, sd_bu
 
 	const char* session = nullptr;
 	const char* id = nullptr;
+	if (sd_bus_message_read(message, "os", &session, &id) < 0 || !session || !id ||
+		that._sessionHandle != session) {
+		return 0;
+	}
+
+	// A report for keys that are held already is a repetition. Should the
+	// release of a shortcut ever go unreported, it counts as released when
+	// nothing was heard of it for a while.
+	static constexpr std::chrono::seconds STALE_AFTER{ 2 };
+	const auto now = std::chrono::steady_clock::now();
+	const auto held = std::ranges::find(that._held, std::string_view(id),
+		&std::pair<std::string, std::chrono::steady_clock::time_point>::first);
+	if (held == that._held.end()) {
+		that._held.emplace_back(id, now);
+		that._activated.emplace_back(id);
+	} else {
+		if (now - held->second > STALE_AFTER) {
+			that._activated.emplace_back(id);
+		}
+		held->second = now;
+	}
+	return 0;
+}
+
+// Deactivated: (o session_handle, s shortcut_id, t timestamp, a{sv} options)
+int PortalShortcuts::_OnDeactivated(sd_bus_message* message, void* userData, sd_bus_error*) noexcept {
+	PortalShortcuts& that = *(PortalShortcuts*)userData;
+
+	const char* session = nullptr;
+	const char* id = nullptr;
 	if (sd_bus_message_read(message, "os", &session, &id) >= 0 && session && id &&
 		that._sessionHandle == session) {
-		that._activated.emplace_back(id);
+		std::erase_if(that._held, [&](const auto& held) { return held.first == id; });
 	}
 	return 0;
 }
@@ -109,7 +142,9 @@ bool PortalShortcuts::Initialize(
 	}
 
 	if (sd_bus_match_signal(bus, &_activatedSlot, nullptr, PORTAL_PATH, SHORTCUTS_INTERFACE,
-		"Activated", _OnActivated, this) < 0) {
+		"Activated", _OnActivated, this) < 0 ||
+		sd_bus_match_signal(bus, &_deactivatedSlot, nullptr, PORTAL_PATH, SHORTCUTS_INTERFACE,
+		"Deactivated", _OnDeactivated, this) < 0) {
 		Logger::Get().Error("Subscribing to the shortcuts failed");
 		return false;
 	}

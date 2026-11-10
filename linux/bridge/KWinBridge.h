@@ -16,6 +16,30 @@
 
 namespace Magpie {
 
+// The modes of outputs as the program kscreen-doctor reports them
+struct KWinOutputModes {
+	struct Mode {
+		// What kscreen-doctor selects the mode by
+		std::string id;
+		Size size;
+		// In hertz
+		double refreshRate = 0.0;
+	};
+
+	// The modes of the output with this name in what "kscreen-doctor -j"
+	// prints; empty if the text is something else or has no such output
+	static std::vector<Mode> Parse(const std::string& json, const std::string& outputName) noexcept;
+
+	// The mode of this size whose refresh rate is closest to `refreshRate`
+	// (in thousandths of a hertz); null if no mode has the size
+	static const Mode* Choose(const std::vector<Mode>& modes, Size size, int32_t refreshRate) noexcept;
+
+	// Whether the mode serves for a wanted refresh rate, or a new mode has
+	// to be made: rates that are computed for a size come out a little
+	// different from the one asked for
+	static bool IsCloseEnough(const Mode& mode, int32_t refreshRate) noexcept;
+};
+
 class KWinBridge {
 public:
 	// Where a window is put by PlaceWindow
@@ -78,8 +102,11 @@ public:
 	std::unique_ptr<CaptureSession> CreateVirtualOutput(
 		const std::string& name, Size size, std::string& outputName) noexcept;
 
-	// Moves an output and gives it a mode with this refresh rate (in
-	// thousandths of a hertz). A new virtual output has 60 Hz.
+	// Moves an output and gives it the mode of this size with this refresh
+	// rate (in thousandths of a hertz). A new virtual output has 60 Hz, or
+	// whatever mode KWin remembers for an output of its name, which may
+	// have another size. Returns false if the output does not end up with
+	// this size at this place.
 	bool ConfigureOutput(const std::string& outputName, Size size, Point position, int32_t refreshRate) noexcept;
 
 	// Puts a window at an exact place, on whatever output that is, and waits

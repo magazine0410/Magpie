@@ -567,9 +567,9 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 
 	auto surface = std::make_unique<ScalingSurface>();
 	if (!surface->CreateWindow(_original.title.empty() ? "Magpie" : _original.title, _config.appId, size,
-		_minWindowedSize, [this](Size proposed, Size current) {
+		_minWindowedSize, [this](Size proposed, bool isWidthChanged, bool isHeightChanged) {
 			return ScalingGeometry::CalcResizedWindowedRendererSize(
-				proposed, current, _srcSize, _minWindowedSize, _maxWindowedSize);
+				proposed, isWidthChanged, isHeightChanged, _srcSize, _minWindowedSize, _maxWindowedSize);
 		})) {
 		return false;
 	}
@@ -955,15 +955,23 @@ void ScalingSession::SwitchToolbarState() noexcept {
 	if (!_isRunning) {
 		return;
 	}
+	const auto tell = [&](const std::string& message) {
+		Logger::Get().Info(message);
+		if (_config.showMessage) {
+			_config.showMessage(message);
+		}
+	};
 	if (!_overlay) {
-		Logger::Get().Warn("The toolbar is not supported in 3D game mode.");
+		tell("The toolbar is not supported in 3D game mode.");
 		return;
 	}
 
 	const ToolbarState newState = (ToolbarState)(((uint32_t)_overlay->GetToolbarState() + 1) % (uint32_t)ToolbarState::COUNT);
 	_overlay->SetToolbarState(newState);
+	// The new state is told, as on Windows: with the toolbar hidden until
+	// the pointer is near, the change cannot be seen otherwise
 	static constexpr const char* NAMES[]{ "Off", "Always show", "Auto-hide" };
-	Logger::Get().Info(std::string("Toolbar: ") + NAMES[(size_t)newState]);
+	tell(std::string("Toolbar: ") + NAMES[(size_t)newState]);
 	_isOverlayRedrawForced = true;
 }
 
@@ -1334,24 +1342,34 @@ bool ScalingSession::TakeScreenshot(std::optional<uint32_t> effectIndex) noexcep
 	}
 	_screenshotThread = std::jthread([image = std::move(image), dir = _options.screenshotsDir,
 		filenameTemplate = _options.screenshotFilenameTemplate, title = info.title,
-		processName = ProcessInfo::GetName(info.pid)]() mutable {
+		processName = ProcessInfo::GetName(info.pid), showMessage = _config.showMessage]() mutable {
 		std::filesystem::path savedFile;
 		const Screenshot::Result result = Screenshot::Save(
 			std::move(image), dir, filenameTemplate, title, processName, savedFile);
+
+		// The texts of the Windows version
+		std::string message;
 		switch (result) {
 		case Screenshot::Result::Success:
+			message = "Screenshot saved as " + savedFile.filename().string();
 			Logger::Get().Info("Screenshot saved as " + savedFile.string());
 			break;
 		case Screenshot::Result::InvalidDirectory:
+			message = "Screenshot failed: Screenshot save directory is invalid.";
 			Logger::Get().Error("The screenshot was not saved: the directory \"" + dir.string() + "\" cannot be used");
 			break;
 		case Screenshot::Result::InvalidFilenameTemplate:
+			message = "Screenshot failed: Screenshot filename format is invalid.";
 			Logger::Get().Error("The screenshot was not saved: the file name template \"" +
 				filenameTemplate + "\" is not valid");
 			break;
 		default:
+			message = "Screenshot failed: An internal error occurred. Please refer to the logs for more details.";
 			Logger::Get().Error("The screenshot was not saved");
 			break;
+		}
+		if (showMessage) {
+			showMessage(message);
 		}
 	});
 	return true;

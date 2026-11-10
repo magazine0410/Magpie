@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fmt/format.h>
+#include <rapidjson/document.h>
 #include <systemd/sd-bus.h>
 #include <wayland-client.h>
 #include "Logger.h"
@@ -519,25 +520,53 @@ std::unique_ptr<CaptureSession> KWinBridge::CreateVirtualOutput(
 	return nullptr;
 }
 
-// Runs a program and waits for it. Its output is discarded.
-static bool RunProgram(const std::vector<std::string>& arguments) noexcept {
+// Runs a program and waits for it. Its standard output goes to `output`, or
+// is discarded without one.
+static bool RunProgram(const std::vector<std::string>& arguments, std::string* output = nullptr) noexcept {
 	std::vector<char*> argv;
 	for (const std::string& argument : arguments) {
 		argv.push_back(const_cast<char*>(argument.c_str()));
 	}
 	argv.push_back(nullptr);
 
+	int pipeFds[2]{ -1, -1 };
+	if (output && pipe2(pipeFds, O_CLOEXEC) < 0) {
+		return false;
+	}
+
 	posix_spawn_file_actions_t actions;
 	posix_spawn_file_actions_init(&actions);
-	posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+	if (output) {
+		posix_spawn_file_actions_adddup2(&actions, pipeFds[1], STDOUT_FILENO);
+	} else {
+		posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+	}
 	posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 
 	pid_t pid = 0;
 	const int result = posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), environ);
 	posix_spawn_file_actions_destroy(&actions);
+	if (output) {
+		close(pipeFds[1]);
+	}
 	if (result != 0) {
 		Logger::Get().Error(fmt::format("Starting {} failed: {}", arguments[0], std::strerror(result)));
+		if (output) {
+			close(pipeFds[0]);
+		}
 		return false;
+	}
+
+	if (output) {
+		output->clear();
+		char buffer[4096];
+		ssize_t count;
+		while ((count = read(pipeFds[0], buffer, sizeof(buffer))) > 0 || (count < 0 && errno == EINTR)) {
+			if (count > 0) {
+				output->append(buffer, (size_t)count);
+			}
+		}
+		close(pipeFds[0]);
 	}
 
 	int status = 0;
@@ -549,6 +578,81 @@ static bool RunProgram(const std::vector<std::string>& arguments) noexcept {
 	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+std::vector<KWinOutputModes::Mode> KWinOutputModes::Parse(
+	const std::string& json,
+	const std::string& outputName
+) noexcept {
+	std::vector<Mode> result;
+
+	rapidjson::Document document;
+	document.Parse(json.c_str(), json.size());
+	if (document.HasParseError() || !document.IsObject()) {
+		return result;
+	}
+	const auto outputs = document.FindMember("outputs");
+	if (outputs == document.MemberEnd() || !outputs->value.IsArray()) {
+		return result;
+	}
+
+	for (const auto& output : outputs->value.GetArray()) {
+		if (!output.IsObject()) {
+			continue;
+		}
+		const auto name = output.FindMember("name");
+		const auto modes = output.FindMember("modes");
+		if (name == output.MemberEnd() || !name->value.IsString() || outputName != name->value.GetString() ||
+			modes == output.MemberEnd() || !modes->value.IsArray()) {
+			continue;
+		}
+
+		for (const auto& mode : modes->value.GetArray()) {
+			if (!mode.IsObject()) {
+				continue;
+			}
+			const auto id = mode.FindMember("id");
+			const auto size = mode.FindMember("size");
+			const auto refreshRate = mode.FindMember("refreshRate");
+			if (id == mode.MemberEnd() || !id->value.IsString() ||
+				size == mode.MemberEnd() || !size->value.IsObject() ||
+				refreshRate == mode.MemberEnd() || !refreshRate->value.IsNumber()) {
+				continue;
+			}
+			const auto width = size->value.FindMember("width");
+			const auto height = size->value.FindMember("height");
+			if (width == size->value.MemberEnd() || !width->value.IsInt() ||
+				height == size->value.MemberEnd() || !height->value.IsInt()) {
+				continue;
+			}
+			result.push_back({
+				id->value.GetString(), { width->value.GetInt(), height->value.GetInt() }, refreshRate->value.GetDouble()
+			});
+		}
+	}
+	return result;
+}
+
+const KWinOutputModes::Mode* KWinOutputModes::Choose(
+	const std::vector<Mode>& modes,
+	Size size,
+	int32_t refreshRate
+) noexcept {
+	const Mode* best = nullptr;
+	for (const Mode& mode : modes) {
+		if (mode.size != size) {
+			continue;
+		}
+		if (!best || std::abs(mode.refreshRate * 1000 - refreshRate) < std::abs(best->refreshRate * 1000 - refreshRate)) {
+			best = &mode;
+		}
+	}
+	return best;
+}
+
+bool KWinOutputModes::IsCloseEnough(const Mode& mode, int32_t refreshRate) noexcept {
+	// A rate of 200 Hz comes out as 198.99 Hz for some sizes
+	return std::abs(mode.refreshRate * 1000 - refreshRate) <= refreshRate * 0.02;
+}
+
 bool KWinBridge::ConfigureOutput(
 	const std::string& outputName,
 	Size size,
@@ -556,21 +660,41 @@ bool KWinBridge::ConfigureOutput(
 	int32_t refreshRate
 ) noexcept {
 	// kscreen-doctor is the command line front end of the library that
-	// Plasma's own display settings use. The three changes are separate
-	// runs, as they were when this was measured.
+	// Plasma's own display settings use.
 	static constexpr const char* TOOL = "kscreen-doctor";
 	const std::string prefix = "output." + outputName;
 
-	bool ok = RunProgram({ TOOL, fmt::format("{}.position.{},{}", prefix, position.x, position.y) });
+	const auto queryModes = [&]() {
+		std::string json;
+		RunProgram({ TOOL, "-j" }, &json);
+		return KWinOutputModes::Parse(json, outputName);
+	};
 
-	// A new virtual output has one mode, with 60 Hz
-	if (ok && refreshRate > 60'500) {
-		ok = RunProgram({ TOOL, fmt::format("{}.addCustomMode.{}.{}.{}.full",
+	// The output has the mode of the screen cast's size with 60 Hz, and
+	// every mode that was ever made for an output of this name, because
+	// KWin keeps those. A mode is made only if none of them will do;
+	// otherwise the list KWin keeps would grow with every start.
+	std::vector<KWinOutputModes::Mode> modes = queryModes();
+	const KWinOutputModes::Mode* mode = KWinOutputModes::Choose(modes, size, refreshRate);
+	if (refreshRate > 60'500 && (!mode || !KWinOutputModes::IsCloseEnough(*mode, refreshRate))) {
+		RunProgram({ TOOL, fmt::format("{}.addCustomMode.{}.{}.{}.full",
 			prefix, size.width, size.height, refreshRate) });
-		ok = ok && RunProgram({ TOOL, fmt::format("{}.mode.{}x{}@{}",
-			prefix, size.width, size.height, (int)std::lround(refreshRate / 1000.0)) });
+		modes = queryModes();
+		mode = KWinOutputModes::Choose(modes, size, refreshRate);
 	}
-	if (!ok) {
+	if (!mode) {
+		Logger::Get().Error(fmt::format("The output {} has no mode of {}x{}", outputName, size.width, size.height));
+		return false;
+	}
+
+	// The mode by its id and not by a name with a rounded refresh rate, and
+	// together with the place, so that KWin does not fall back to the mode
+	// it remembers for the name in between
+	if (!RunProgram({
+		TOOL,
+		fmt::format("{}.mode.{}", prefix, mode->id),
+		fmt::format("{}.position.{},{}", prefix, position.x, position.y)
+	})) {
 		Logger::Get().Error(fmt::format("Configuring the output {} with kscreen-doctor failed", outputName));
 		return false;
 	}
@@ -581,7 +705,13 @@ bool KWinBridge::ConfigureOutput(
 			Logger::Get().Info(fmt::format("Output {}: {}x{} at {},{} with {:.2f} Hz", outputName,
 				output.rect.Width(), output.rect.Height(), output.rect.left, output.rect.top,
 				output.refreshRate / 1000.0));
-			if (refreshRate > 60'500 && std::abs(output.refreshRate - refreshRate) > 1000) {
+			if (output.rect.Width() != size.width || output.rect.Height() != size.height) {
+				// The screen cast would show the output squeezed to its own size
+				Logger::Get().Error(fmt::format("The output {} did not take the size {}x{}",
+					outputName, size.width, size.height));
+				return false;
+			}
+			if (refreshRate > 60'500 && std::abs(output.refreshRate - refreshRate) > refreshRate * 0.02) {
 				// Not fatal: the source is then held to this rate
 				Logger::Get().Warn(fmt::format("The output {} did not take the refresh rate {:.2f} Hz",
 					outputName, refreshRate / 1000.0));

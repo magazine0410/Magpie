@@ -168,6 +168,21 @@ enum class ScalingError {
 	CreateFenceFailed
 };
 
+// What to tell the user when scaling does not start
+inline const char* ScalingErrorMessage(ScalingError error) noexcept {
+	switch (error) {
+	case ScalingError::NoError: return "no error";
+	case ScalingError::InvalidScalingMode: return "the scaling mode has no effects";
+	case ScalingError::Windowed3DGameMode: return "3D game mode cannot be combined with windowed scaling";
+	case ScalingError::InvalidSourceWindow: return "the window cannot be scaled";
+	case ScalingError::Maximized: return "the window is maximized or fullscreen";
+	case ScalingError::InvalidCropping: return "too little of the window is left after cropping";
+	case ScalingError::BannedInWindowedMode: return "a maximized or fullscreen window cannot be scaled into a window";
+	case ScalingError::CaptureFailed: return "capturing failed";
+	default: return "scaling could not be set up";
+	}
+}
+
 enum class ScalingFlags {
 	None,
 	WindowedMode = 1,

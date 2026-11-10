@@ -58,6 +58,13 @@ struct ScalingSurface::State {
 	Size proposedSize;
 	bool isProposedSizeFixed = false;
 	bool isSizeFixed = false;
+	// The user is resizing the window, and the size it had when that began
+	bool isProposedResizing = false;
+	bool isResizing = false;
+	Size resizeStartSize;
+	// The directions in which the user has changed the size since then
+	bool isWidthResized = false;
+	bool isHeightResized = false;
 	SizeRule sizeRule;
 	bool isConfigured = false;
 	bool isClosed = false;
@@ -225,6 +232,7 @@ struct ScalingSurface::State {
 			State& state = *(State*)data;
 			state.proposedSize = { width, height };
 			state.isProposedSizeFixed = false;
+			state.isProposedResizing = false;
 			const uint32_t* begin = (const uint32_t*)states->data;
 			for (const uint32_t* value = begin; value < begin + states->size / sizeof(uint32_t); ++value) {
 				switch (*value) {
@@ -235,6 +243,9 @@ struct ScalingSurface::State {
 				case XDG_TOPLEVEL_STATE_TILED_TOP:
 				case XDG_TOPLEVEL_STATE_TILED_BOTTOM:
 					state.isProposedSizeFixed = true;
+					break;
+				case XDG_TOPLEVEL_STATE_RESIZING:
+					state.isProposedResizing = true;
 					break;
 				}
 			}
@@ -247,11 +258,27 @@ struct ScalingSurface::State {
 		.configure = [](void* data, xdg_surface* xdgSurface, uint32_t serial) {
 			State& state = *(State*)data;
 			const Size proposed = state.proposedSize;
+			if (state.isProposedResizing && !state.isResizing) {
+				state.resizeStartSize = state.size;
+				state.isWidthResized = state.isHeightResized = false;
+			}
+			state.isResizing = state.isProposedResizing;
+
 			// Zero: the size is ours to choose, so it stays
 			if (proposed.width > 0 && proposed.height > 0) {
 				state.isSizeFixed = state.isProposedSizeFixed;
-				const Size newSize = state.isSizeFixed || !state.sizeRule ?
-					proposed : state.sizeRule(proposed, state.size);
+
+				Size newSize = proposed;
+				if (!state.isSizeFixed && state.sizeRule) {
+					if (state.isResizing) {
+						state.isWidthResized = state.isWidthResized || proposed.width != state.resizeStartSize.width;
+						state.isHeightResized = state.isHeightResized || proposed.height != state.resizeStartSize.height;
+						newSize = state.sizeRule(proposed, state.isWidthResized, state.isHeightResized);
+					} else {
+						newSize = state.sizeRule(proposed,
+							proposed.width != state.size.width, proposed.height != state.size.height);
+					}
+				}
 				if (newSize != state.size) {
 					state.size = newSize;
 					state.SetOpaqueRegion();

@@ -25,10 +25,13 @@ namespace Magpie {
 
 class ScalingSurface {
 public:
-	// Decides the size of a window that the user resizes: it gets the size
-	// the desktop proposes and the size the window has, and returns the size
-	// to take
-	using SizeRule = std::function<Size(Size proposed, Size current)>;
+	// Decides the size of a window when the desktop proposes one: it gets
+	// that size, and in which directions it differs from what the window
+	// was. While the user resizes the window, that is compared with the
+	// size at the start, and a direction that has changed once counts as
+	// changed until the user lets go: dragging a corner then stays dragging
+	// a corner when the mouse comes back to the row or column it began in.
+	using SizeRule = std::function<Size(Size proposed, bool isWidthChanged, bool isHeightChanged)>;
 
 	struct PointerEvent {
 		enum class Type {

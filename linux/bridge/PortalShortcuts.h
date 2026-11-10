@@ -5,6 +5,7 @@
 // Linux counterpart of RegisterHotKey and the keyboard hook in
 // src/Magpie/ShortcutService.cpp.
 #pragma once
+#include <chrono>
 #include <span>
 #include <string>
 #include <vector>
@@ -44,9 +45,15 @@ public:
 
 private:
 	static int _OnActivated(sd_bus_message* message, void* userData, sd_bus_error* error) noexcept;
+	static int _OnDeactivated(sd_bus_message* message, void* userData, sd_bus_error* error) noexcept;
 
 	sd_bus* _bus = nullptr;
 	sd_bus_slot* _activatedSlot = nullptr;
+	sd_bus_slot* _deactivatedSlot = nullptr;
+	// The shortcuts whose keys are down, and when each was last reported.
+	// The desktop may report a shortcut again and again while its keys are
+	// held; only the first report counts.
+	std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> _held;
 	std::string _sessionHandle;
 	std::vector<std::pair<std::string, std::string>> _bound;
 	std::vector<std::string> _activated;

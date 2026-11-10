@@ -16,6 +16,10 @@
 #                minimize buttons, the toolbar command, the D-Bus properties
 #   focus        coming back through KWin's edge barrier; another window
 #                becoming active during windowed scaling
+#   sizes        sources of other sizes: the virtual monitor has the size of
+#                the source, the cursor matches the picture down to its
+#                lower edge, and a second run adds no custom mode to the
+#                list that KWin keeps for the virtual monitor
 #
 # It moves the pointer and clicks on the toolbar and into its own test
 # windows, so nobody should use the machine while it runs (about six minutes
@@ -32,7 +36,7 @@
 set -u
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 PARTS=("$@")
-[ ${#PARTS[@]} -eq 0 ] && PARTS=(options full windowed 3d all intersected toolbar service focus)
+[ ${#PARTS[@]} -eq 0 ] && PARTS=(options full windowed 3d all intersected toolbar service focus sizes)
 B=$REPO/linux/build
 SB=$REPO/linux/spikes/build
 OUT=${OUT:-$(mktemp -d /tmp/magpie-features-test.XXXXXX)}
@@ -97,6 +101,41 @@ except Exception as error:
 "
 }
 frames() { grep -E "^(Frames|Pointer|Scaling ended)" "$1" | tr '\n' ' '; }
+# How many custom modes KWin keeps for the virtual monitor
+custom_modes() { python3 -c "
+import json, os
+d = json.load(open(os.path.expanduser('~/.config/kwinoutputconfig.json')))
+def walk(x):
+    if isinstance(x, dict):
+        if x.get('connectorName') == 'Virtual-Magpie':
+            print(len(x.get('customModes', [])))
+        for v in x.values(): walk(v)
+    elif isinstance(x, list):
+        for v in x: walk(v)
+walk(d)" | head -1; }
+resize_source() { # resize_source FRAME_WIDTH FRAME_HEIGHT
+	kwin_script "for (const w of workspace.windowList()) { if (w.internalId.toString() === \"$UUID\") { w.frameGeometry = { x: 4400, y: 264, width: $1, height: $2 }; } }"
+	sleep 0.6
+}
+scale_size() { # scale_size NAME CONTENT_WIDTH CONTENT_HEIGHT
+	local name=$1 w=$2 h=$3
+	local before
+	before=$(custom_modes)
+	pointer move 2880 900
+	"$SCALE" --window "$UUID" --toolbar off --seconds 6 -v > "$OUT/scale_size_$name.log" 2>&1 &
+	local p=$!; PIDS+=("$p")
+	sleep 2.5
+	grep -E "Output Virtual-Magpie: " "$OUT/scale_size_$name.log" | sed -E 's/^[^|]*\|[^|]*\|[^|]*\|[^|]*\|//'
+	# The centre of the picture shows the centre of the source
+	pointer move 4800 540 sleep 400 click sleep 300
+	has "click at the centre" "x=($((w / 2 - 1))|$((w / 2))|$((w / 2 + 1))) y=($((h / 2 - 1))|$((h / 2))|$((h / 2 + 1)))$" "$(last '^press' "$LOG")"
+	# 40 pixels above the lower edge of the picture
+	pointer move 4800 1040 sleep 400 click sleep 300
+	local expected=$(( (1040 * h + 540) / 1080 ))
+	has "click near the bottom" "y=($((expected - 1))|$expected|$((expected + 1)))$" "$(last '^press' "$LOG")"
+	wait "$p"
+	echo "custom modes that KWin keeps: $before before, $(custom_modes) after"
+}
 grab() { # grab OUTPUT NAME: one picture of a monitor, as OUT/NAME.ppm
 	"$SB/kwin_cast/kwin_cast" --output "$1" --cursor hidden --no-dmabuf --seconds 1 --dump "$OUT/$2.ppm" > /dev/null 2>&1
 }
@@ -508,6 +547,19 @@ focus)
 	kill "$OTHER_PID" 2>/dev/null
 	sleep 0.5
 	check "restored" "$BEFORE" "$(window_line "$UUID" | sed 's/state=-/state=active/')"
+	;;
+sizes)
+	echo "--- a source of 584x403 ---"
+	resize_source 584 431
+	scale_size a 584 403
+	echo "--- a source of 700x500, twice ---"
+	resize_source 700 528
+	scale_size b 700 500
+	scale_size c 700 500
+	resize_source 640 508
+	kwin_script "for (const w of workspace.windowList()) { if (w.internalId.toString() === \"$UUID\") { w.frameGeometry = { x: 4480, y: 264, width: 640, height: 508 }; } }"
+	sleep 0.5
+	check "source as before" "$BEFORE" "$(window_line "$UUID")"
 	;;
 *)
 	echo "unknown part: $part"

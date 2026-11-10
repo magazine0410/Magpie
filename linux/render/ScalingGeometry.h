@@ -67,12 +67,16 @@ struct ScalingGeometry {
 		Size maxSize
 	) noexcept;
 
-	// The size for a window that the user resizes, from the size the desktop
-	// proposes: the direction in which the proposal differs more from the
-	// current size is followed and the other is computed.
+	// The size for a window when the desktop proposes one, for example while
+	// the user resizes it. `isWidthChanged` and `isHeightChanged` say in
+	// which directions the proposal differs from what the window was. With
+	// one direction (an edge is dragged), that one is followed and the other
+	// is computed. With both (a corner is dragged), the result is the
+	// largest size of the right shape inside the proposal.
 	static Size CalcResizedWindowedRendererSize(
 		Size proposed,
-		Size current,
+		bool isWidthChanged,
+		bool isHeightChanged,
 		Size srcSize,
 		Size minSize,
 		Size maxSize

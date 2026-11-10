@@ -181,25 +181,32 @@ bool ScalingGeometry::CalcInitialWindowedRendererSize(
 
 Size ScalingGeometry::CalcResizedWindowedRendererSize(
 	Size proposed,
-	Size current,
+	bool isWidthChanged,
+	bool isHeightChanged,
 	Size srcSize,
 	Size minSize,
 	Size maxSize
 ) noexcept {
-	const float widthChange = std::abs((float)(proposed.width - current.width)) / (float)current.width;
-	const float heightChange = std::abs((float)(proposed.height - current.height)) / (float)current.height;
-
 	Size result{};
-	if (widthChange >= heightChange) {
-		result.width = proposed.width;
-	} else {
+	if (isWidthChanged && isHeightChanged) {
+		// The direction that limits a picture of the source's shape
+		const float srcAspectRatio = (float)srcSize.height / (float)srcSize.width;
+		if ((float)proposed.height / (float)proposed.width > srcAspectRatio) {
+			result.width = proposed.width;
+		} else {
+			result.height = proposed.height;
+		}
+	} else if (isHeightChanged) {
 		result.height = proposed.height;
+	} else {
+		result.width = proposed.width;
 	}
+
 	if (!CalcWindowedRendererSize(result.width, result.height, srcSize, minSize, maxSize)) {
-		return current;
+		// Cannot happen for a source that could be scaled at all
+		return minSize;
 	}
 	return result;
 }
-
 
 }

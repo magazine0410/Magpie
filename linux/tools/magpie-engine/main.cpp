@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <spdlog/sinks/stdout_sinks.h>
 #include <systemd/sd-bus.h>
+#include "DesktopNotification.h"
 #include "KWinBridge.h"
 #include "Logger.h"
 #include "Paths.h"
@@ -239,10 +240,16 @@ struct Engine {
 			.validation = validation,
 			.appId = MAGPIE_APP_ID,
 			.iconFontPath = MAGPIE_DEFAULT_ICON_FONT,
+			.showMessage = [](const std::string& text) {
+				DesktopNotification::Show(MAGPIE_APP_ID, "Magpie", text);
+			},
 			.lastWindowedWidth = lastWindowedWidth
 		});
 		if (error != ScalingError::NoError) {
-			Logger::Get().Error("Scaling did not start (error " + std::to_string((int)error) + ")");
+			// Counterpart of the showError callback of the Windows options
+			const std::string message = std::string("Scaling did not start: ") + ScalingErrorMessage(error) + ".";
+			Logger::Get().Error(message);
+			DesktopNotification::Show(MAGPIE_APP_ID, "Magpie", message);
 			session.reset();
 			SetState(State::Idle);
 			return false;

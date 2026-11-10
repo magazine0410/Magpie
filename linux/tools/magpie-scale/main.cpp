@@ -113,19 +113,6 @@ static const char* Describe(ScalingSession::EndReason reason) {
 	}
 }
 
-static const char* Describe(ScalingError error) {
-	switch (error) {
-	case ScalingError::InvalidScalingMode: return "the scaling mode has no effects";
-	case ScalingError::InvalidSourceWindow: return "the window cannot be scaled";
-	case ScalingError::Maximized: return "the window is maximized or fullscreen";
-	case ScalingError::BannedInWindowedMode: return "a maximized or fullscreen window cannot be scaled into a window";
-	case ScalingError::Windowed3DGameMode: return "3D game mode cannot be combined with windowed scaling";
-	case ScalingError::InvalidCropping: return "too little of the window is left after cropping";
-	case ScalingError::CaptureFailed: return "capturing failed";
-	default: return "scaling could not be set up";
-	}
-}
-
 int main(int argc, char* argv[]) {
 	// The signals that end the program arrive through a descriptor, so that
 	// the main loop can wait for them together with everything else. They
@@ -146,6 +133,10 @@ int main(int argc, char* argv[]) {
 	options.IsAdjustCursorSpeed(false);
 	config.appId = MAGPIE_APP_ID;
 	config.iconFontPath = MAGPIE_DEFAULT_ICON_FONT;
+	config.showMessage = [](const std::string& text) {
+		std::printf("%s\n", text.c_str());
+		std::fflush(stdout);
+	};
 
 	const char* configFile = nullptr;
 	const char* modeName = nullptr;
@@ -354,7 +345,7 @@ int main(int argc, char* argv[]) {
 	ScalingSession session;
 	const ScalingError error = session.Start(bridge, windowId, options, config);
 	if (error != ScalingError::NoError) {
-		std::fprintf(stderr, "Scaling did not start: %s.\n", Describe(error));
+		std::fprintf(stderr, "Scaling did not start: %s.\n", ScalingErrorMessage(error));
 		return 1;
 	}
 	std::printf("Scaling %s\n", session.Describe().c_str());
