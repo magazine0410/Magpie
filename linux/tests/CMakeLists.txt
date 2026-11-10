@@ -23,6 +23,7 @@ catch_discover_tests(magpie_tests)
 # The renderer tests need a Vulkan device; a software implementation such as
 # llvmpipe is enough. MAGPIE_TEST_GPUS limits them to some of the devices.
 add_executable(magpie_render_tests
+	TestDuplicateFrames.cpp
 	TestRenderBasics.cpp
 	TestRenderer.cpp
 )
