@@ -36,11 +36,13 @@ jobs:
           vulkan-headers vulkan-loader-devel muParser-devel libpng-devel
           wayland-devel wayland-protocols-devel
           pipewire-devel systemd-devel plasma-wayland-protocols-devel wlr-protocols-devel
+          fontconfig-devel dejavu-sans-fonts
           mesa-vulkan-drivers vulkan-validation-layers
 
       - uses: actions/checkout@v4
 
-      # Downloads the pinned DirectX Shader Compiler release (see linux/cmake/Dxc.cmake).
+      # Downloads the pinned releases of the DirectX Shader Compiler, Dear ImGui
+      # and the icon font (see linux/cmake/Dxc.cmake and ImGui.cmake).
       - name: Configure
         run: cmake -S linux -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
