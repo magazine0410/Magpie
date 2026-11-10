@@ -35,6 +35,11 @@ struct ScalingGeometry {
 		const Rect& rendererRect,
 		bool skipBorder
 	) noexcept;
+
+	// The reverse: which point of the source a point of the scaled picture
+	// shows. Counterpart of ScalingToSrc in CursorManager.cpp, with rounding
+	// to the nearest pixel. Outside the destination the distance is kept.
+	static Point ScalingToSrc(Point pt, const Rect& srcRect, const Rect& destRect) noexcept;
 };
 
 }

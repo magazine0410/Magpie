@@ -52,6 +52,7 @@ add_executable(magpie_engine_tests
 	RenderTestListener.cpp
 	TestBridge.cpp
 	TestFrameSource.cpp
+	TestScalingSession.cpp
 )
 
 target_link_libraries(magpie_engine_tests PRIVATE

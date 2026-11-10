@@ -1,16 +1,47 @@
-# What turns a capture into scaled frames: for now the frame source that
-# receives a screen cast from PipeWire.
+# What turns a window into a scaled picture: the frame source that receives a
+# screen cast from PipeWire, the surface that shows the picture, and the
+# scaling session that ties them to the desktop.
+find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
+# The layer shell, for a surface above all windows that takes no focus
+pkg_get_variable(WLR_PROTOCOLS_DIR wlr-protocols pkgdatadir)
+
+set(GENERATED)
+foreach(xml IN ITEMS
+	${WLR_PROTOCOLS_DIR}/unstable/wlr-layer-shell-unstable-v1.xml
+	# The layer shell refers to its popups
+	${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml
+)
+	get_filename_component(name ${xml} NAME_WE)
+	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)
+	set(code ${CMAKE_CURRENT_BINARY_DIR}/${name}-protocol.c)
+	add_custom_command(OUTPUT ${header}
+		COMMAND ${WAYLAND_SCANNER} client-header ${xml} ${header}
+		DEPENDS ${xml} VERBATIM)
+	add_custom_command(OUTPUT ${code}
+		COMMAND ${WAYLAND_SCANNER} private-code ${xml} ${code}
+		DEPENDS ${xml} VERBATIM)
+	list(APPEND GENERATED ${header} ${code})
+endforeach()
 
 add_library(magpie_engine STATIC
+	LayerSurface.cpp
 	PipeWireFrameSource.cpp
+	ScalingSession.cpp
+	${GENERATED}
 )
 
-target_include_directories(magpie_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(magpie_engine
-	PUBLIC magpie_render
-	PRIVATE PkgConfig::PIPEWIRE magpie_warnings
+target_include_directories(magpie_engine
+	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+	PRIVATE ${CMAKE_CURRENT_BINARY_DIR}
 )
+target_link_libraries(magpie_engine
+	PUBLIC magpie_render magpie_bridge
+	PRIVATE PkgConfig::PIPEWIRE PkgConfig::WAYLAND_CLIENT magpie_warnings
+)
+target_compile_definitions(magpie_engine PRIVATE VK_USE_PLATFORM_WAYLAND_KHR)
 # See render/CMakeLists.txt
-target_compile_options(magpie_engine PRIVATE -Wno-missing-field-initializers)
+target_compile_options(magpie_engine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers>)

@@ -75,4 +75,28 @@ Point ScalingGeometry::SrcToScaling(
 	return result;
 }
 
+Point ScalingGeometry::ScalingToSrc(Point pt, const Rect& srcRect, const Rect& destRect) noexcept {
+	Point result{ srcRect.left, srcRect.top };
+
+	if (pt.x >= destRect.right) {
+		result.x += srcRect.Width() + pt.x - destRect.right;
+	} else if (pt.x < destRect.left) {
+		result.x += pt.x - destRect.left;
+	} else {
+		const double pos = double(pt.x - destRect.left) / (destRect.Width() - 1);
+		result.x += (int32_t)std::lround(pos * (srcRect.Width() - 1));
+	}
+
+	if (pt.y >= destRect.bottom) {
+		result.y += srcRect.Height() + pt.y - destRect.bottom;
+	} else if (pt.y < destRect.top) {
+		result.y += pt.y - destRect.top;
+	} else {
+		const double pos = double(pt.y - destRect.top) / (destRect.Height() - 1);
+		result.y += (int32_t)std::lround(pos * (srcRect.Height() - 1));
+	}
+
+	return result;
+}
+
 }

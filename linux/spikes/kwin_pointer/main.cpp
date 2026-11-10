@@ -5,6 +5,10 @@
 //   move X Y        absolute position in compositor (global) coordinates
 //   rel DX DY       relative motion
 //   click           left button press and release
+//   down / up       left button press / release, for a drag
+//   scroll N        vertical wheel motion of N (15 is one notch)
+//   key CODE        press and release of the key with this evdev code (needs
+//                   version 4 of the protocol); for example 183 for F13
 //   sleep MS
 // Commands run in the order given.
 #include <algorithm>
@@ -64,6 +68,17 @@ int main(int argc, char* argv[]) {
 			wl_display_roundtrip(display);
 			usleep(30000);
 			org_kde_kwin_fake_input_button(g_fakeInput, BTN_LEFT, 0);
+		} else if (cmd == "down" || cmd == "up") {
+			org_kde_kwin_fake_input_button(g_fakeInput, BTN_LEFT, cmd == "down" ? 1 : 0);
+		} else if (cmd == "scroll" && i + 1 < argc) {
+			// Axis 0 is the vertical one
+			org_kde_kwin_fake_input_axis(g_fakeInput, 0, wl_fixed_from_double(std::atof(argv[++i])));
+		} else if (cmd == "key" && i + 1 < argc && g_version >= 4) {
+			const uint32_t code = (uint32_t)std::atoi(argv[++i]);
+			org_kde_kwin_fake_input_keyboard_key(g_fakeInput, code, 1);
+			wl_display_roundtrip(display);
+			usleep(30000);
+			org_kde_kwin_fake_input_keyboard_key(g_fakeInput, code, 0);
 		} else if (cmd == "sleep" && i + 1 < argc) {
 			wl_display_roundtrip(display);
 			usleep((useconds_t)std::atoi(argv[++i]) * 1000);

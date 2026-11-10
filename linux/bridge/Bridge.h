@@ -65,9 +65,23 @@ struct WindowInfo {
 	uint32_t pid = 0;
 	// With decoration, in desktop coordinates
 	Rect frameRect;
+	// The part the program draws; equal to frameRect if the back end does
+	// not report it
+	Rect clientRect;
 	bool isActive = false;
 	bool isMinimized = false;
+	bool isMaximized = false;
 	bool isFullscreen = false;
+	// The desktop draws no title bar and border around it
+	bool hasNoBorder = false;
+};
+
+struct OutputInfo {
+	std::string name;
+	// In desktop coordinates
+	Rect rect;
+	// In thousandths of a hertz
+	int32_t refreshRate = 0;
 };
 
 // The windows that `query` describes: the one with this id; otherwise those

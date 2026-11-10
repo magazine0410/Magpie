@@ -34,12 +34,13 @@ set(ENTRIES
 	"src/Magpie.Core/FrameSourceBase.cpp|a6f7d997f7b84bb5b3219bb6b06542c553629a0c43f2d74de9fb77bc72bd9620|linux/render/DuplicateFrameDetector.cpp, linux/engine/PipeWireFrameSource.cpp (Update)"
 	"src/Magpie.Core/shaders/DuplicateFrameCS.hlsl|f66d01447c98dc848ae9c70ea723087502101abb57a219bbe1310524f4191c30|linux/render/DuplicateFrameDetector.cpp (DUPLICATE_FRAME_CS)"
 	"src/Magpie.Core/StepTimer.cpp|53eae394dd7fcbd1f7e8d4872a944255cdd422836b78260aa1f400ec51b4e3b7|linux/render/StepTimer.cpp"
-	"src/Magpie.Core/SrcTracker.cpp|ecaeba5806414b1167a9f706a9e9fb1ca6fd2e12dc0ff96418c4df3317f41199|linux/render/ScalingGeometry.cpp (only the cropping at the end of _CalcSrcRect)"
+	"src/Magpie.Core/SrcTracker.cpp|ecaeba5806414b1167a9f706a9e9fb1ca6fd2e12dc0ff96418c4df3317f41199|linux/render/ScalingGeometry.cpp (the cropping at the end of _CalcSrcRect), linux/engine/ScalingSession.cpp (_TrackSource)"
+	"src/Magpie.Core/ScalingWindow.cpp|e907d4c4ff401550ee4d4e1ccadd5a2851a301cfe6468b970a2d4d7cc0b8c5dd|linux/engine/ScalingSession.cpp (start checks, source and focus tracking, stop, for fullscreen scaling only)"
 	"src/Magpie.Core/GraphicsCaptureFrameSource.cpp|aea66d5a5e20a18c5046d06d7afbf241b921b532dec42f68a9a93c88ed8bf5b5|linux/engine/PipeWireFrameSource.cpp (only taking the newest frame in _Update)"
 	"src/Magpie.Core/CursorDrawer.cpp|70904c8d5454b4e2a278df85c561ddc7c1db931905f542b54e0364a4c5d1ed4a|linux/render/CursorDrawer.cpp (colour cursors, without hiding after a delay)"
 	"src/Magpie.Core/shaders/SimpleVS.hlsl|32b2aaf5bd9879680a6fbc5d4e118e31cc1fb9b6bac4b251d4caef030e9b6f51|linux/render/CursorDrawer.cpp (CURSOR_VS)"
 	"src/Magpie.Core/shaders/SimplePS.hlsl|aae5c4aa3abbf7900f940e829bde895fa5906d9d6469c96722ac650770e4b8d2|linux/render/CursorDrawer.cpp (CURSOR_PS)"
-	"src/Magpie.Core/CursorManager.cpp|c072b221e9abb6c6fc48bd2fa26122907f00bcf005f05b58359701119ab76e6d|linux/render/ScalingGeometry.cpp (only SrcToScaling)"
+	"src/Magpie.Core/CursorManager.cpp|c072b221e9abb6c6fc48bd2fa26122907f00bcf005f05b58359701119ab76e6d|linux/render/ScalingGeometry.cpp (SrcToScaling, ScalingToSrc), linux/engine/ScalingSession.cpp (_UpdatePointer: capture and release, without clipping and speed)"
 )
 
 set(changed "")

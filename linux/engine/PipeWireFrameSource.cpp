@@ -249,9 +249,13 @@ PipeWireFrameSource::~PipeWireFrameSource() {
 static const spa_pod* BuildFormatOffer(
 	spa_pod_builder* builder,
 	spa_video_format format,
-	const std::vector<uint64_t>& modifiers
+	const std::vector<uint64_t>& modifiers,
+	Size fixedSize
 ) noexcept {
 	spa_rectangle defaultSize{ 1920, 1080 }, minSize{ 1, 1 }, maxSize{ 16384, 16384 };
+	if (fixedSize.width > 0 && fixedSize.height > 0) {
+		defaultSize = minSize = maxSize = { (uint32_t)fixedSize.width, (uint32_t)fixedSize.height };
+	}
 	// The producer decides the rate; these values only have to allow it
 	spa_fraction defaultRate{ 240, 1 }, minRate{ 0, 1 }, maxRate{ 1000, 1 };
 
@@ -353,12 +357,12 @@ bool PipeWireFrameSource::Initialize(VulkanDevice& device, const Options& option
 		for (spa_video_format format : STREAM_FORMATS) {
 			const std::vector<uint64_t> modifiers = device.DmabufModifiers(ToVkFormat(format));
 			if (!modifiers.empty()) {
-				offers.push_back(BuildFormatOffer(&builder, format, modifiers));
+				offers.push_back(BuildFormatOffer(&builder, format, modifiers, options.fixedSize));
 			}
 		}
 	}
 	for (spa_video_format format : STREAM_FORMATS) {
-		offers.push_back(BuildFormatOffer(&builder, format, {}));
+		offers.push_back(BuildFormatOffer(&builder, format, {}, options.fixedSize));
 	}
 	if (std::find(offers.begin(), offers.end(), nullptr) != offers.end()) {
 		Logger::Get().Error("The format offers do not fit their buffer");

@@ -191,6 +191,27 @@ TEST_CASE("A point of the source is mapped to the scaled picture", "[cursor]") {
 	CHECK(ScalingGeometry::SrcToScaling({ 109, 69 }, srcRect, shifted, rendererRect, false) == Point{ 239, 129 });
 }
 
+TEST_CASE("A point of the scaled picture is mapped to the source", "[cursor]") {
+	const Rect srcRect{ 10, 20, 110, 70 };
+	const Rect destRect{ 40, 30, 340, 230 };
+
+	// First pixel to first pixel, last to last
+	CHECK(ScalingGeometry::ScalingToSrc({ 40, 30 }, srcRect, destRect) == Point{ 10, 20 });
+	CHECK(ScalingGeometry::ScalingToSrc({ 339, 229 }, srcRect, destRect) == Point{ 109, 69 });
+	// In between: 150/299 of 99 and 100/199 of 49
+	CHECK(ScalingGeometry::ScalingToSrc({ 190, 130 }, srcRect, destRect) == Point{ 60, 45 });
+	// Outside the destination the distance is kept
+	CHECK(ScalingGeometry::ScalingToSrc({ 345, 236 }, srcRect, destRect) == Point{ 115, 76 });
+	CHECK(ScalingGeometry::ScalingToSrc({ 37, 28 }, srcRect, destRect) == Point{ 7, 18 });
+
+	// There and back gives the same point of the source
+	const Rect rendererRect{ 0, 0, 400, 260 };
+	for (int32_t x = srcRect.left; x < srcRect.right; x += 7) {
+		const Point scaled = ScalingGeometry::SrcToScaling({ x, 33 }, srcRect, destRect, rendererRect, false);
+		CHECK(ScalingGeometry::ScalingToSrc(scaled, srcRect, destRect) == Point{ x, 33 });
+	}
+}
+
 TEST_CASE("The cursor is blended over the picture", "[cursor]") {
 	ForEachDevice([](VulkanDevice& device, const GraphicsCardInfo&) {
 		CursorDrawer drawer;

@@ -60,6 +60,10 @@ public:
 		// hands it out; -1 for the session's own daemon. It is duplicated.
 		int pipeWireFd = -1;
 		uint32_t nodeId = 0;
+		// If not zero, ask for frames of exactly this size. KWin takes the
+		// size of a virtual output from what the consumer of its stream asks
+		// for, whatever size was requested when the output was created.
+		Size fixedSize{};
 		// Accept DMA-BUF frames if the graphics card can import them
 		bool isDmabufAllowed = true;
 		// A frame for which the stream reports no changed region is not

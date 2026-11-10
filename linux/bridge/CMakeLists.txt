@@ -10,6 +10,7 @@ find_package(PlasmaWaylandProtocols REQUIRED)
 
 set(GENERATED)
 foreach(xml IN ITEMS
+	${PLASMA_WAYLAND_PROTOCOLS_DIR}/fake-input.xml
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/plasma-window-management.xml
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/zkde-screencast-unstable-v1.xml
 )
