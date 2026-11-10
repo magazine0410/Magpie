@@ -50,11 +50,12 @@ pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
 add_executable(magpie_engine_tests
 	RenderTestListener.cpp
+	TestBridge.cpp
 	TestFrameSource.cpp
 )
 
 target_link_libraries(magpie_engine_tests PRIVATE
-	magpie_engine PkgConfig::PIPEWIRE magpie_warnings Catch2::Catch2WithMain)
+	magpie_engine magpie_bridge PkgConfig::PIPEWIRE magpie_warnings Catch2::Catch2WithMain)
 target_compile_definitions(magpie_engine_tests PRIVATE
 	MAGPIE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
 	MAGPIE_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"
