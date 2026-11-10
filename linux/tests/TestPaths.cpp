@@ -12,6 +12,7 @@ TEST_CASE("Directories follow the XDG variables", "[Paths]") {
 
 	CHECK(Paths::ConfigDir() == "/xdg/config/magpie");
 	CHECK(Paths::CacheDir() == "/xdg/cache/magpie");
+	CHECK(Paths::StateDir() == "/xdg/state/magpie");
 	CHECK(Paths::LogsDir() == "/xdg/state/magpie/logs");
 }
 
@@ -24,6 +25,7 @@ TEST_CASE("Without XDG variables the defaults below HOME apply", "[Paths]") {
 
 	CHECK(Paths::ConfigDir() == "/home/tester/.config/magpie");
 	CHECK(Paths::CacheDir() == "/home/tester/.cache/magpie");
+	CHECK(Paths::StateDir() == "/home/tester/.local/state/magpie");
 	CHECK(Paths::LogsDir() == "/home/tester/.local/state/magpie/logs");
 }
 

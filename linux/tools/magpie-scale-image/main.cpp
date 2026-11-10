@@ -1,27 +1,19 @@
 // magpie-scale-image: scales a PNG file with the effects of a scaling mode,
 // off screen. Shows what an effect chain does to an image without a
 // compositor or a source window, and serves the renderer tests.
-#include <algorithm>
-#include <charconv>
 #include <cstdio>
-#include <cstring>
-#include <fstream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 #include <spdlog/sinks/stdout_sinks.h>
 #include "ImageScaler.h"
 #include "Logger.h"
-#include "ScalingMode.h"
-#include "Settings.h"
-#include "SettingsJson.h"
-#include "SettingsStore.h"
-#include "StrHelper.h"
+#include "ToolOptions.h"
 #include "VulkanDevice.h"
 
 using namespace Magpie;
+using namespace Magpie::ToolOptions;
 
 static void PrintUsage() {
 	std::puts(
@@ -68,118 +60,6 @@ static void PrintUsage() {
 		"  -v                 print the log\n"
 		"\n"
 		"Exit status: 0 on success, 1 on failure, 2 for validation messages.");
-}
-
-static bool ParseFloat(std::string_view text, float& value) noexcept {
-	const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-	return ec == std::errc() && end == text.data() + text.size();
-}
-
-static bool ParseInt(std::string_view text, int& value) noexcept {
-	const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-	return ec == std::errc() && end == text.data() + text.size();
-}
-
-// "AxB" or, with allowSingle, "A" for both
-static bool ParsePair(std::string_view text, float& first, float& second, bool allowSingle) noexcept {
-	const size_t delim = text.find('x');
-	if (delim == std::string_view::npos) {
-		if (!allowSingle || !ParseFloat(text, first)) {
-			return false;
-		}
-		second = first;
-		return true;
-	}
-	return ParseFloat(text.substr(0, delim), first) && ParseFloat(text.substr(delim + 1), second);
-}
-
-static bool ParseEffectSpec(std::string_view spec, EffectOption& effect) noexcept {
-	const auto parts = StrHelper::Split(spec, ',');
-	if (parts.empty() || parts[0].empty()) {
-		return false;
-	}
-
-	// Effect names use the Windows separator, as in config.json
-	effect.name = parts[0];
-	std::replace(effect.name.begin(), effect.name.end(), '/', '\\');
-
-	for (size_t i = 1; i < parts.size(); ++i) {
-		const size_t delim = parts[i].find('=');
-		if (delim == std::string_view::npos) {
-			return false;
-		}
-		const std::string_view key = parts[i].substr(0, delim);
-		const std::string_view value = parts[i].substr(delim + 1);
-
-		if (key == "type") {
-			if (value == "normal") {
-				effect.scalingType = ScalingType::Normal;
-			} else if (value == "fit") {
-				effect.scalingType = ScalingType::Fit;
-			} else if (value == "absolute") {
-				effect.scalingType = ScalingType::Absolute;
-			} else if (value == "fill") {
-				effect.scalingType = ScalingType::Fill;
-			} else {
-				return false;
-			}
-		} else if (key == "scale") {
-			if (!ParsePair(value, effect.scale.first, effect.scale.second, true)) {
-				return false;
-			}
-		} else {
-			float number;
-			if (key.empty() || !ParseFloat(value, number)) {
-				return false;
-			}
-			effect.parameters[std::string(key)] = number;
-		}
-	}
-
-	return true;
-}
-
-static std::optional<OutputAlignment> ParseAlignment(std::string_view text) noexcept {
-	static constexpr const char* NAMES[] = {
-		"lefttop", "top", "righttop", "left", "center", "right", "leftbottom", "bottom", "rightbottom"
-	};
-	for (size_t i = 0; i < std::size(NAMES); ++i) {
-		if (text == NAMES[i]) {
-			return (OutputAlignment)i;
-		}
-	}
-	return std::nullopt;
-}
-
-static bool LoadMode(const char* configFile, std::string_view modeName, std::vector<EffectOption>& effects) {
-	Settings settings;
-	if (configFile) {
-		std::ifstream file(configFile, std::ios::binary);
-		std::ostringstream content;
-		content << file.rdbuf();
-		if (!file || !ReadSettingsJson(content.str(), settings)) {
-			std::fprintf(stderr, "Cannot read %s\n", configFile);
-			return false;
-		}
-	} else if (SettingsStore::Load(settings) == SettingsStore::LoadResult::Failed) {
-		std::fprintf(stderr, "Cannot read %s\n", SettingsStore::ConfigPath().c_str());
-		return false;
-	}
-
-	for (const ScalingMode& mode : settings.scalingModes) {
-		if (mode.name == modeName) {
-			for (const EffectItem& item : mode.effects) {
-				effects.push_back((EffectOption)item);
-			}
-			return true;
-		}
-	}
-
-	std::fprintf(stderr, "There is no scaling mode \"%.*s\". Available:\n", (int)modeName.size(), modeName.data());
-	for (const ScalingMode& mode : settings.scalingModes) {
-		std::fprintf(stderr, "  %s\n", mode.name.c_str());
-	}
-	return false;
 }
 
 static int ListGpus() {
@@ -251,11 +131,7 @@ int main(int argc, char* argv[]) {
 			request.options.IsWindowedMode(true);
 		} else if (arg == "--crop") {
 			const char* text = value();
-			const auto parts = StrHelper::Split(text, ',');
-			Cropping& cropping = request.options.cropping;
-			if (parts.size() != 4 || !ParseFloat(parts[0], cropping.Left) || !ParseFloat(parts[1], cropping.Top) ||
-				!ParseFloat(parts[2], cropping.Right) || !ParseFloat(parts[3], cropping.Bottom) ||
-				cropping.Left < 0 || cropping.Top < 0 || cropping.Right < 0 || cropping.Bottom < 0) {
+			if (!ParseCropping(text, request.options.cropping)) {
 				invalid(text);
 			}
 		} else if (arg == "--frame") {

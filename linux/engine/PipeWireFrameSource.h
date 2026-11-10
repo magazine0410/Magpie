@@ -62,6 +62,9 @@ public:
 		uint32_t nodeId = 0;
 		// Accept DMA-BUF frames if the graphics card can import them
 		bool isDmabufAllowed = true;
+		// A frame for which the stream reports no changed region is not
+		// taken as a new frame. Without this every frame with a picture is.
+		bool isDamageUsed = true;
 		// Removed from the edges of the stream's picture
 		Cropping cropping{};
 		DuplicateFrameDetectionMode duplicateFrameDetectionMode = DuplicateFrameDetectionMode::Dynamic;
@@ -75,8 +78,13 @@ public:
 		uint64_t skippedFrames = 0;
 		// Buffers that only carried the cursor
 		uint64_t cursorUpdates = 0;
-		// Pictures that had no damage, or equalled the previous one
+		// Pictures for which the stream reported no changed region
 		uint64_t undamagedFrames = 0;
+		// Of those, the ones that did differ from the frame before. Counted
+		// only when the damage is not used and every frame is compared; it
+		// shows whether a producer's damage can be relied on.
+		uint64_t changedUndamagedFrames = 0;
+		// Pictures that the comparison found equal to the one before
 		uint64_t duplicateFrames = 0;
 	};
 
@@ -165,6 +173,10 @@ private:
 	// The newest buffer with a picture that has not been used yet
 	pw_buffer* _pendingBuffer = nullptr;
 	std::chrono::steady_clock::time_point _pendingArrivalTime;
+	bool _isPendingUndamaged = false;
+	// The stream has reported a changed region at least once. Before that an
+	// empty damage list may only mean that the producer does not fill it in.
+	bool _hasSeenDamage = false;
 	bool _failed = false;
 
 	// One texture per DMA-BUF of the stream. PipeWire reuses a small set of

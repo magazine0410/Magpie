@@ -314,6 +314,67 @@ TEST_CASE("Equal frames are dropped", "[capture]") {
 	});
 }
 
+TEST_CASE("Frames without damage are not new frames", "[capture]") {
+	ForEachDevice([](VulkanDevice& device, const GraphicsCardInfo&) {
+		static constexpr uint32_t WIDTH = 128, HEIGHT = 96;
+
+		SECTION("once the stream has reported damage") {
+			Capture capture;
+			capture.Start(device, WIDTH, HEIGHT,
+				{ .duplicateFrameDetectionMode = DuplicateFrameDetectionMode::Never });
+
+			capture.SendPicture(MakePicture(WIDTH, HEIGHT, 1));
+			CHECK(capture.source.Update() == FrameSourceState::NewFrame);
+
+			// Another picture, but the stream says that nothing has changed
+			capture.Send({ .pixels = MakePicture(WIDTH, HEIGHT, 2), .hasDamage = false });
+			CHECK(capture.source.Update() == FrameSourceState::Waiting);
+			CHECK(capture.ReadOutput(device) == MakePicture(WIDTH, HEIGHT, 1));
+			CHECK(capture.source.GetStatistics().undamagedFrames == 1);
+
+			capture.SendPicture(MakePicture(WIDTH, HEIGHT, 3));
+			CHECK(capture.source.Update() == FrameSourceState::NewFrame);
+			CHECK(capture.ReadOutput(device) == MakePicture(WIDTH, HEIGHT, 3));
+		}
+
+		SECTION("but a stream that never reports damage is not trusted") {
+			Capture capture;
+			capture.Start(device, WIDTH, HEIGHT,
+				{ .duplicateFrameDetectionMode = DuplicateFrameDetectionMode::Never });
+
+			for (uint32_t seed = 1; seed <= 3; ++seed) {
+				capture.Send({ .pixels = MakePicture(WIDTH, HEIGHT, seed), .hasDamage = false });
+				CHECK(capture.source.Update() == FrameSourceState::NewFrame);
+				CHECK(capture.ReadOutput(device) == MakePicture(WIDTH, HEIGHT, seed));
+			}
+			CHECK(capture.source.GetStatistics().undamagedFrames == 0);
+		}
+
+		SECTION("and with the damage switched off the comparison shows whether it was right") {
+			Capture capture;
+			capture.Start(device, WIDTH, HEIGHT, {
+				.isDamageUsed = false,
+				.duplicateFrameDetectionMode = DuplicateFrameDetectionMode::Always
+			});
+
+			capture.SendPicture(MakePicture(WIDTH, HEIGHT, 1));
+			CHECK(capture.source.Update() == FrameSourceState::NewFrame);
+
+			// No damage and indeed the same picture
+			capture.Send({ .pixels = MakePicture(WIDTH, HEIGHT, 1), .hasDamage = false });
+			CHECK(capture.source.Update() == FrameSourceState::Waiting);
+			// No damage, but another picture
+			capture.Send({ .pixels = MakePicture(WIDTH, HEIGHT, 2), .hasDamage = false });
+			CHECK(capture.source.Update() == FrameSourceState::NewFrame);
+
+			const PipeWireFrameSource::Statistics& statistics = capture.source.GetStatistics();
+			CHECK(statistics.undamagedFrames == 2);
+			CHECK(statistics.duplicateFrames == 1);
+			CHECK(statistics.changedUndamagedFrames == 1);
+		}
+	});
+}
+
 TEST_CASE("The end of the stream is reported", "[capture]") {
 	ForEachDevice([](VulkanDevice& device, const GraphicsCardInfo&) {
 		static constexpr uint32_t WIDTH = 128, HEIGHT = 96;

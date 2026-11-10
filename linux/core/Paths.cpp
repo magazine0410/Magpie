@@ -41,8 +41,12 @@ std::filesystem::path Paths::CacheDir() noexcept {
 	return BaseDir("XDG_CACHE_HOME", ".cache") / APP_DIR;
 }
 
+std::filesystem::path Paths::StateDir() noexcept {
+	return BaseDir("XDG_STATE_HOME", ".local/state") / APP_DIR;
+}
+
 std::filesystem::path Paths::LogsDir() noexcept {
-	return BaseDir("XDG_STATE_HOME", ".local/state") / APP_DIR / "logs";
+	return StateDir() / "logs";
 }
 
 }

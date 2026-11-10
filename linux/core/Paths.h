@@ -14,7 +14,11 @@ struct Paths {
 	// $XDG_CACHE_HOME/magpie, otherwise ~/.cache/magpie.
 	static std::filesystem::path CacheDir() noexcept;
 
-	// $XDG_STATE_HOME/magpie/logs, otherwise ~/.local/state/magpie/logs.
+	// $XDG_STATE_HOME/magpie, otherwise ~/.local/state/magpie. For what the
+	// program remembers between runs and the user does not edit.
+	static std::filesystem::path StateDir() noexcept;
+
+	// The directory "logs" in StateDir.
 	static std::filesystem::path LogsDir() noexcept;
 };
 

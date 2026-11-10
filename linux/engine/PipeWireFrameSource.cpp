@@ -164,12 +164,42 @@ struct PipeWireFrameSource::Listeners {
 			}
 
 			++that._statistics.frames;
+
+			// The damage is a list of regions that ends with an empty one
+			bool isUndamaged = false;
+			if (const spa_meta* meta = spa_buffer_find_meta(spaBuffer, SPA_META_VideoDamage)) {
+				bool hasRegion = false;
+				const spa_meta_region* region;
+				spa_meta_for_each(region, meta) {
+					if (!spa_meta_region_is_valid(region)) {
+						break;
+					}
+					hasRegion = true;
+				}
+
+				if (hasRegion) {
+					that._hasSeenDamage = true;
+				} else {
+					isUndamaged = that._hasSeenDamage;
+				}
+			}
+
+			if (isUndamaged) {
+				++that._statistics.undamagedFrames;
+				if (that._options.isDamageUsed) {
+					// Nothing has changed, so this is not a new frame
+					pw_stream_queue_buffer(that._stream, buffer);
+					continue;
+				}
+			}
+
 			if (that._pendingBuffer) {
 				++that._statistics.skippedFrames;
 				pw_stream_queue_buffer(that._stream, that._pendingBuffer);
 			}
 			that._pendingBuffer = buffer;
 			that._pendingArrivalTime = std::chrono::steady_clock::now();
+			that._isPendingUndamaged = isUndamaged;
 		}
 	}
 
@@ -455,6 +485,11 @@ FrameSourceState PipeWireFrameSource::Update() noexcept {
 	if (_duplicateFrameDetector && _duplicateFrameDetector->OnNewFrame(*_output)) {
 		++_statistics.duplicateFrames;
 		return FrameSourceState::Waiting;
+	}
+
+	if (_isPendingUndamaged && _options.duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Always) {
+		// The comparison contradicts the stream's damage
+		++_statistics.changedUndamagedFrames;
 	}
 
 	return FrameSourceState::NewFrame;

@@ -6,16 +6,13 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <poll.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <spdlog/sinks/stdout_sinks.h>
-#include <wayland-client.h>
 #include <vulkan/vulkan.h>
 #include "EffectChain.h"
 #include "Logger.h"
@@ -23,8 +20,7 @@
 #include "StepTimer.h"
 #include "Swapchain.h"
 #include "VulkanDevice.h"
-#include "xdg-decoration-unstable-v1-client-protocol.h"
-#include "xdg-shell-client-protocol.h"
+#include "WaylandWindow.h"
 
 using namespace Magpie;
 using namespace std::chrono;
@@ -50,117 +46,6 @@ static void PrintUsage() {
 		"  --seconds N        run time (default 5)\n"
 		"  --effects-dir DIR  directory of the .hlsl files\n"
 		"  -v                 print the log");
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// Window
-
-struct Window {
-	wl_display* display = nullptr;
-	wl_compositor* compositor = nullptr;
-	xdg_wm_base* wmBase = nullptr;
-	zxdg_decoration_manager_v1* decorationManager = nullptr;
-	wl_surface* surface = nullptr;
-	xdg_surface* xdgSurface = nullptr;
-	xdg_toplevel* toplevel = nullptr;
-
-	// Size asked for by the compositor; zero means "choose yourself"
-	Size configuredSize;
-	bool isConfigured = false;
-	bool isClosed = false;
-};
-
-static void OnRegistryGlobal(void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t) {
-	Window& window = *(Window*)data;
-	if (std::strcmp(interface, wl_compositor_interface.name) == 0) {
-		window.compositor = (wl_compositor*)wl_registry_bind(registry, name, &wl_compositor_interface, 4);
-	} else if (std::strcmp(interface, xdg_wm_base_interface.name) == 0) {
-		window.wmBase = (xdg_wm_base*)wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
-	} else if (std::strcmp(interface, zxdg_decoration_manager_v1_interface.name) == 0) {
-		window.decorationManager = (zxdg_decoration_manager_v1*)wl_registry_bind(
-			registry, name, &zxdg_decoration_manager_v1_interface, 1);
-	}
-}
-
-static const wl_registry_listener REGISTRY_LISTENER{
-	.global = OnRegistryGlobal,
-	.global_remove = [](void*, wl_registry*, uint32_t) {}
-};
-
-static const xdg_wm_base_listener WM_BASE_LISTENER{
-	.ping = [](void*, xdg_wm_base* wmBase, uint32_t serial) { xdg_wm_base_pong(wmBase, serial); }
-};
-
-static const xdg_surface_listener XDG_SURFACE_LISTENER{
-	.configure = [](void* data, xdg_surface* xdgSurface, uint32_t serial) {
-		xdg_surface_ack_configure(xdgSurface, serial);
-		((Window*)data)->isConfigured = true;
-	}
-};
-
-static const xdg_toplevel_listener TOPLEVEL_LISTENER{
-	.configure = [](void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array*) {
-		((Window*)data)->configuredSize = { width, height };
-	},
-	.close = [](void* data, xdg_toplevel*) { ((Window*)data)->isClosed = true; }
-};
-
-static bool CreateWindow(Window& window, bool fullscreen) {
-	window.display = wl_display_connect(nullptr);
-	if (!window.display) {
-		std::fprintf(stderr, "Cannot connect to a Wayland compositor.\n");
-		return false;
-	}
-
-	wl_registry* registry = wl_display_get_registry(window.display);
-	wl_registry_add_listener(registry, &REGISTRY_LISTENER, &window);
-	wl_display_roundtrip(window.display);
-	if (!window.compositor || !window.wmBase) {
-		std::fprintf(stderr, "The compositor lacks wl_compositor or xdg_wm_base.\n");
-		return false;
-	}
-	xdg_wm_base_add_listener(window.wmBase, &WM_BASE_LISTENER, nullptr);
-
-	window.surface = wl_compositor_create_surface(window.compositor);
-	window.xdgSurface = xdg_wm_base_get_xdg_surface(window.wmBase, window.surface);
-	xdg_surface_add_listener(window.xdgSurface, &XDG_SURFACE_LISTENER, &window);
-	window.toplevel = xdg_surface_get_toplevel(window.xdgSurface);
-	xdg_toplevel_add_listener(window.toplevel, &TOPLEVEL_LISTENER, &window);
-	xdg_toplevel_set_title(window.toplevel, "Magpie present test");
-	xdg_toplevel_set_app_id(window.toplevel, "magpie-present-test");
-	if (fullscreen) {
-		xdg_toplevel_set_fullscreen(window.toplevel, nullptr);
-	}
-	if (window.decorationManager) {
-		// Ask the compositor to draw the title bar
-		zxdg_toplevel_decoration_v1* decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(
-			window.decorationManager, window.toplevel);
-		zxdg_toplevel_decoration_v1_set_mode(decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
-	}
-	wl_surface_commit(window.surface);
-
-	while (!window.isConfigured) {
-		if (wl_display_dispatch(window.display) < 0) {
-			return false;
-		}
-	}
-	return true;
-}
-
-// Processes the events that have arrived without waiting for more
-static bool PumpEvents(wl_display* display) {
-	while (wl_display_prepare_read(display) != 0) {
-		wl_display_dispatch_pending(display);
-	}
-	wl_display_flush(display);
-
-	pollfd fd{ wl_display_get_fd(display), POLLIN, 0 };
-	if (poll(&fd, 1, 0) > 0) {
-		wl_display_read_events(display);
-	} else {
-		wl_display_cancel_read(display);
-	}
-	return wl_display_dispatch_pending(display) >= 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -297,12 +182,12 @@ int main(int argc, char* argv[]) {
 		verbose ? spdlog::level::info : spdlog::level::warn,
 		std::make_shared<spdlog::sinks::stderr_sink_mt>());
 
-	Window window;
-	if (!CreateWindow(window, fullscreen)) {
+	WaylandWindow window;
+	if (!window.Create("Magpie present test", "magpie-present-test", fullscreen)) {
 		return 1;
 	}
-	if (window.configuredSize.width > 0 && window.configuredSize.height > 0) {
-		windowSize = window.configuredSize;
+	if (window.ConfiguredSize().width > 0 && window.ConfiguredSize().height > 0) {
+		windowSize = window.ConfiguredSize();
 	}
 
 	// Everything that uses the device is declared after it, so that it is
@@ -315,8 +200,8 @@ int main(int argc, char* argv[]) {
 	VkSurfaceKHR surface = VK_NULL_HANDLE;
 	const VkWaylandSurfaceCreateInfoKHR surfaceInfo{
 		.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
-		.display = window.display,
-		.surface = window.surface
+		.display = window.Display(),
+		.surface = window.Surface()
 	};
 	if (vkCreateWaylandSurfaceKHR(device.Instance(), &surfaceInfo, nullptr, &surface) != VK_SUCCESS) {
 		std::fprintf(stderr, "vkCreateWaylandSurfaceKHR failed.\n");
@@ -360,7 +245,7 @@ int main(int argc, char* argv[]) {
 
 	StepTimer stepTimer;
 	stepTimer.Initialize(minFps, maxFps);
-	const int wakeFds[2]{ wl_display_get_fd(window.display), sourceTimer };
+	const int wakeFds[2]{ window.EventFd(), sourceTimer };
 	stepTimer.SetWakeDescriptors(std::span(wakeFds, sourceTimer >= 0 ? 2 : 1));
 	const bool waitForWake = sourceTimer >= 0;
 
@@ -377,12 +262,12 @@ int main(int argc, char* argv[]) {
 
 	StepTimerStatus status = StepTimerStatus::WaitingForNewFrame;
 	bool failed = false;
-	while (!window.isClosed && !failed && elapsedMs() < seconds * 1000) {
+	while (!window.IsClosed() && !failed && elapsedMs() < seconds * 1000) {
 		bool fpsUpdated = false;
 		status = stepTimer.WaitForNextFrame(
 			waitForWake && status != StepTimerStatus::WaitingForFPSLimiter, fpsUpdated);
 
-		if (!PumpEvents(window.display)) {
+		if (!window.PumpEvents()) {
 			break;
 		}
 
@@ -403,8 +288,8 @@ int main(int argc, char* argv[]) {
 		}
 
 		// The window was resized
-		const Size wantedSize = window.configuredSize.width > 0 && window.configuredSize.height > 0
-			? window.configuredSize : swapchain.GetSize();
+		const Size wantedSize = window.ConfiguredSize().width > 0 && window.ConfiguredSize().height > 0
+			? window.ConfiguredSize() : swapchain.GetSize();
 		if (wantedSize != swapchain.GetSize()) {
 			if (!swapchain.Resize(wantedSize)) {
 				break;
@@ -418,13 +303,13 @@ int main(int argc, char* argv[]) {
 
 		stepTimer.PrepareForRender();
 
-		const Swapchain::FrameResult result = swapchain.PresentFrame([&](VkCommandBuffer cmd, VkImage image) {
+		const Swapchain::FrameResult result = swapchain.PresentFrame([&](VkCommandBuffer cmd, const Swapchain::Frame& frame) {
 			chain.Draw(cmd, stepTimer.GetFrameCount());
 
 			const Texture& output = *chain.Output();
 			const Rect destRect = ScalingGeometry::CalcDestRect(swapchain.GetSize(),
 				{ (int32_t)output.width, (int32_t)output.height }, options.outputAlignment);
-			Swapchain::Compose(cmd, output, image, swapchain.GetSize(), destRect);
+			Swapchain::Compose(cmd, output, frame.image, swapchain.GetSize(), destRect);
 		});
 
 		if (result == Swapchain::FrameResult::NeedsResize) {

@@ -26,15 +26,13 @@ Swapchain::~Swapchain() {
 	if (_fence) {
 		vkDestroyFence(device, _fence, nullptr);
 	}
-	if (_renderSemaphore) {
-		vkDestroySemaphore(device, _renderSemaphore, nullptr);
-	}
 	if (_acquireSemaphore) {
 		vkDestroySemaphore(device, _acquireSemaphore, nullptr);
 	}
 	if (_commandBuffer) {
 		vkFreeCommandBuffers(device, _device->CommandPool(), 1, &_commandBuffer);
 	}
+	_DestroyImageResources();
 	if (_swapchain) {
 		vkDestroySwapchainKHR(device, _swapchain, nullptr);
 	}
@@ -108,7 +106,6 @@ bool Swapchain::Initialize(
 	const VkFenceCreateInfo fenceInfo{ .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 	if (!Check(vkAllocateCommandBuffers(vkDevice, &allocInfo, &_commandBuffer), "vkAllocateCommandBuffers") ||
 		!Check(vkCreateSemaphore(vkDevice, &semaphoreInfo, nullptr, &_acquireSemaphore), "vkCreateSemaphore") ||
-		!Check(vkCreateSemaphore(vkDevice, &semaphoreInfo, nullptr, &_renderSemaphore), "vkCreateSemaphore") ||
 		!Check(vkCreateFence(vkDevice, &fenceInfo, nullptr, &_fence), "vkCreateFence")) {
 		return false;
 	}
@@ -121,8 +118,23 @@ bool Swapchain::Resize(Size size) noexcept {
 	return _Create(size);
 }
 
+void Swapchain::_DestroyImageResources() noexcept {
+	for (VkImageView view : _imageViews) {
+		vkDestroyImageView(_device->Device(), view, nullptr);
+	}
+	_imageViews.clear();
+
+	for (VkSemaphore semaphore : _renderSemaphores) {
+		vkDestroySemaphore(_device->Device(), semaphore, nullptr);
+	}
+	_renderSemaphores.clear();
+}
+
 bool Swapchain::_Create(Size size) noexcept {
 	const VkDevice device = _device->Device();
+
+	// They belong to the images of the swap chain that is replaced
+	_DestroyImageResources();
 
 	VkSurfaceCapabilitiesKHR caps;
 	if (!Check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_device->PhysicalDevice(), _surface, &caps),
@@ -130,7 +142,8 @@ bool Swapchain::_Create(Size size) noexcept {
 		return false;
 	}
 
-	// The image is filled by a blit and a clear
+	// The image is filled by a blit and a clear; the cursor is drawn onto it,
+	// which every surface allows
 	if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
 		Logger::Get().Error("The surface does not allow transfers to its images");
 		return false;
@@ -179,10 +192,36 @@ bool Swapchain::_Create(Size size) noexcept {
 	uint32_t count = 0;
 	vkGetSwapchainImagesKHR(device, _swapchain, &count, nullptr);
 	_images.resize(count);
-	return Check(vkGetSwapchainImagesKHR(device, _swapchain, &count, _images.data()), "vkGetSwapchainImagesKHR");
+	if (!Check(vkGetSwapchainImagesKHR(device, _swapchain, &count, _images.data()), "vkGetSwapchainImagesKHR")) {
+		return false;
+	}
+
+	for (VkImage image : _images) {
+		const VkImageViewCreateInfo viewInfo{
+			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+			.image = image,
+			.viewType = VK_IMAGE_VIEW_TYPE_2D,
+			.format = _format,
+			.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }
+		};
+		VkImageView view = VK_NULL_HANDLE;
+		if (!Check(vkCreateImageView(device, &viewInfo, nullptr, &view), "vkCreateImageView")) {
+			return false;
+		}
+		_imageViews.push_back(view);
+
+		const VkSemaphoreCreateInfo semaphoreInfo{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+		VkSemaphore semaphore = VK_NULL_HANDLE;
+		if (!Check(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &semaphore), "vkCreateSemaphore")) {
+			return false;
+		}
+		_renderSemaphores.push_back(semaphore);
+	}
+
+	return true;
 }
 
-Swapchain::FrameResult Swapchain::PresentFrame(const std::function<void(VkCommandBuffer, VkImage)>& draw) noexcept {
+Swapchain::FrameResult Swapchain::PresentFrame(const std::function<void(VkCommandBuffer, const Frame&)>& draw) noexcept {
 	const VkDevice device = _device->Device();
 
 	uint32_t imageIndex = 0;
@@ -208,7 +247,7 @@ Swapchain::FrameResult Swapchain::PresentFrame(const std::function<void(VkComman
 
 	// The old content is not needed
 	TransitionImage(_commandBuffer, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-	draw(_commandBuffer, image);
+	draw(_commandBuffer, Frame{ image, _imageViews[imageIndex] });
 	TransitionImage(_commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
 	// TransitionImage waits for all earlier commands, so the whole buffer
@@ -222,7 +261,7 @@ Swapchain::FrameResult Swapchain::PresentFrame(const std::function<void(VkComman
 		.commandBufferCount = 1,
 		.pCommandBuffers = &_commandBuffer,
 		.signalSemaphoreCount = 1,
-		.pSignalSemaphores = &_renderSemaphore
+		.pSignalSemaphores = &_renderSemaphores[imageIndex]
 	};
 	if (!Check(vkEndCommandBuffer(_commandBuffer), "vkEndCommandBuffer") ||
 		!Check(vkResetFences(device, 1, &_fence), "vkResetFences") ||
@@ -234,7 +273,7 @@ Swapchain::FrameResult Swapchain::PresentFrame(const std::function<void(VkComman
 	const VkPresentInfoKHR presentInfo{
 		.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
 		.waitSemaphoreCount = 1,
-		.pWaitSemaphores = &_renderSemaphore,
+		.pWaitSemaphores = &_renderSemaphores[imageIndex],
 		.swapchainCount = 1,
 		.pSwapchains = &_swapchain,
 		.pImageIndices = &imageIndex

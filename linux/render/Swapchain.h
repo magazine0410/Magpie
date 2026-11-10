@@ -35,11 +35,17 @@ public:
 
 	bool Resize(Size size) noexcept;
 
+	// The swap chain image of one frame
+	struct Frame {
+		VkImage image = VK_NULL_HANDLE;
+		VkImageView view = VK_NULL_HANDLE;
+	};
+
 	// Acquires an image, has `draw` record the commands that fill it, and
 	// presents it. `draw` receives the image in
-	// VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL. Returns when the GPU has executed
-	// the commands.
-	FrameResult PresentFrame(const std::function<void(VkCommandBuffer, VkImage)>& draw) noexcept;
+	// VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and leaves it in that layout.
+	// Returns when the GPU has executed the commands.
+	FrameResult PresentFrame(const std::function<void(VkCommandBuffer, const Frame&)>& draw) noexcept;
 
 	Size GetSize() const noexcept {
 		return { (int32_t)_extent.width, (int32_t)_extent.height };
@@ -72,10 +78,18 @@ public:
 private:
 	bool _Create(Size size) noexcept;
 
+	void _DestroyImageResources() noexcept;
+
 	VulkanDevice* _device = nullptr;
 	VkSurfaceKHR _surface = VK_NULL_HANDLE;
 	VkSwapchainKHR _swapchain = VK_NULL_HANDLE;
 	std::vector<VkImage> _images;
+	// For what is drawn onto the image and not copied to it: the cursor
+	std::vector<VkImageView> _imageViews;
+	// Signalled when the commands of a frame have been executed, and waited
+	// for by the presentation. One per image, because the presentation may
+	// hold on to it until the image is acquired again.
+	std::vector<VkSemaphore> _renderSemaphores;
 	VkFormat _format = VK_FORMAT_UNDEFINED;
 	VkColorSpaceKHR _colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 	VkExtent2D _extent{};
@@ -84,7 +98,6 @@ private:
 
 	VkCommandBuffer _commandBuffer = VK_NULL_HANDLE;
 	VkSemaphore _acquireSemaphore = VK_NULL_HANDLE;
-	VkSemaphore _renderSemaphore = VK_NULL_HANDLE;
 	VkFence _fence = VK_NULL_HANDLE;
 };
 
