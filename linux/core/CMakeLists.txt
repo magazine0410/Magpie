@@ -4,6 +4,7 @@ add_library(magpie_core STATIC
 	Paths.cpp
 	ProcessInfo.cpp
 	ProfileOptions.cpp
+	ProfileRules.cpp
 	ScalingOptions.cpp
 	ScreenshotFilenameTemplateHelper.cpp
 	Settings.cpp

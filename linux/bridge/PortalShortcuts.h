@@ -8,6 +8,7 @@
 #include <chrono>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 #include <systemd/sd-bus.h>
 
@@ -43,13 +44,27 @@ public:
 		return _bound;
 	}
 
+	// Whether the desktop reported other keys since the last call; Bound
+	// has them then
+	bool TakeChanged() noexcept {
+		return std::exchange(_isChanged, false);
+	}
+
+	// Opens the desktop's dialog in which the user changes the keys of this
+	// program's shortcuts. Returns false if the portal has no such function
+	// (it came with version 2 of the interface) or refuses.
+	bool Configure() noexcept;
+
 private:
 	static int _OnActivated(sd_bus_message* message, void* userData, sd_bus_error* error) noexcept;
 	static int _OnDeactivated(sd_bus_message* message, void* userData, sd_bus_error* error) noexcept;
+	static int _OnShortcutsChanged(sd_bus_message* message, void* userData, sd_bus_error* error) noexcept;
 
 	sd_bus* _bus = nullptr;
 	sd_bus_slot* _activatedSlot = nullptr;
 	sd_bus_slot* _deactivatedSlot = nullptr;
+	sd_bus_slot* _changedSlot = nullptr;
+	bool _isChanged = false;
 	// The shortcuts whose keys are down, and when each was last reported.
 	// The desktop may report a shortcut again and again while its keys are
 	// held; only the first report counts.

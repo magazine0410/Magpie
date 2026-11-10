@@ -16,6 +16,7 @@ static constexpr const char* SHORTCUTS_INTERFACE = "org.freedesktop.portal.Globa
 PortalShortcuts::~PortalShortcuts() {
 	sd_bus_slot_unref(_activatedSlot);
 	sd_bus_slot_unref(_deactivatedSlot);
+	sd_bus_slot_unref(_changedSlot);
 	if (_bus && !_sessionHandle.empty()) {
 		sd_bus_call_method(_bus, PORTAL_NAME, _sessionHandle.c_str(),
 			"org.freedesktop.portal.Session", "Close", nullptr, nullptr, "");
@@ -65,14 +66,9 @@ int PortalShortcuts::_OnDeactivated(sd_bus_message* message, void* userData, sd_
 	return 0;
 }
 
-// The read position is at the variant of "shortcuts": a(sa{sv}), for every
-// bound shortcut its id and properties
-static void ReadBoundShortcuts(sd_bus_message* message, std::vector<std::pair<std::string, std::string>>& bound) noexcept {
-	if (sd_bus_message_enter_container(message, 'v', "a(sa{sv})") <= 0) {
-		sd_bus_message_skip(message, "v");
-		return;
-	}
-
+// The read position is at an array a(sa{sv}): for every bound shortcut its
+// id and properties
+static void ReadShortcutArray(sd_bus_message* message, std::vector<std::pair<std::string, std::string>>& bound) noexcept {
 	sd_bus_message_enter_container(message, 'a', "(sa{sv})");
 	while (sd_bus_message_enter_container(message, 'r', "sa{sv}") > 0) {
 		const char* id = nullptr;
@@ -98,7 +94,49 @@ static void ReadBoundShortcuts(sd_bus_message* message, std::vector<std::pair<st
 		sd_bus_message_exit_container(message);
 	}
 	sd_bus_message_exit_container(message);
+}
+
+// The read position is at the variant of "shortcuts", which holds such an
+// array
+static void ReadBoundShortcuts(sd_bus_message* message, std::vector<std::pair<std::string, std::string>>& bound) noexcept {
+	if (sd_bus_message_enter_container(message, 'v', "a(sa{sv})") <= 0) {
+		sd_bus_message_skip(message, "v");
+		return;
+	}
+	ReadShortcutArray(message, bound);
 	sd_bus_message_exit_container(message);
+}
+
+// ShortcutsChanged: (o session_handle, a(sa{sv}) shortcuts)
+int PortalShortcuts::_OnShortcutsChanged(sd_bus_message* message, void* userData, sd_bus_error*) noexcept {
+	PortalShortcuts& that = *(PortalShortcuts*)userData;
+
+	const char* session = nullptr;
+	if (sd_bus_message_read(message, "o", &session) < 0 || !session || that._sessionHandle != session) {
+		return 0;
+	}
+
+	that._bound.clear();
+	ReadShortcutArray(message, that._bound);
+	that._isChanged = true;
+	return 0;
+}
+
+bool PortalShortcuts::Configure() noexcept {
+	if (!_bus || _sessionHandle.empty()) {
+		return false;
+	}
+
+	// No parent window and no options
+	sd_bus_error error = SD_BUS_ERROR_NULL;
+	const int result = sd_bus_call_method(_bus, PORTAL_NAME, PORTAL_PATH, SHORTCUTS_INTERFACE,
+		"ConfigureShortcuts", &error, nullptr, "osa{sv}", _sessionHandle.c_str(), "", 0);
+	if (result < 0) {
+		Logger::Get().Warn(fmt::format("The desktop's dialog for shortcuts did not open: {}",
+			error.message ? error.message : "unknown error"));
+	}
+	sd_bus_error_free(&error);
+	return result >= 0;
 }
 
 bool PortalShortcuts::Initialize(
@@ -144,7 +182,9 @@ bool PortalShortcuts::Initialize(
 	if (sd_bus_match_signal(bus, &_activatedSlot, nullptr, PORTAL_PATH, SHORTCUTS_INTERFACE,
 		"Activated", _OnActivated, this) < 0 ||
 		sd_bus_match_signal(bus, &_deactivatedSlot, nullptr, PORTAL_PATH, SHORTCUTS_INTERFACE,
-		"Deactivated", _OnDeactivated, this) < 0) {
+		"Deactivated", _OnDeactivated, this) < 0 ||
+		sd_bus_match_signal(bus, &_changedSlot, nullptr, PORTAL_PATH, SHORTCUTS_INTERFACE,
+		"ShortcutsChanged", _OnShortcutsChanged, this) < 0) {
 		Logger::Get().Error("Subscribing to the shortcuts failed");
 		return false;
 	}

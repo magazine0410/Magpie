@@ -4,6 +4,7 @@ add_executable(magpie_tests
 	TestLogger.cpp
 	TestPaths.cpp
 	TestProfileOptions.cpp
+	TestProfileRules.cpp
 	TestScalingOptions.cpp
 	TestScreenshotFilename.cpp
 	TestSettingsJson.cpp
@@ -78,3 +79,17 @@ set_tests_properties(effects-compile-all PROPERTIES LABELS slow TIMEOUT 3600)
 
 add_test(NAME upstream-sync
 	COMMAND ${CMAKE_COMMAND} "-DREPO_ROOT=${CMAKE_SOURCE_DIR}/.." -P "${CMAKE_CURRENT_SOURCE_DIR}/UpstreamSync.cmake")
+
+# The settings application: its view models and its window, which is loaded
+# without being shown
+if(MAGPIE_BUILD_APP)
+	find_package(Qt6 REQUIRED COMPONENTS Test)
+	add_executable(magpie_app_tests
+		AppTestMain.cpp
+		TestAppWindow.cpp
+	)
+	target_link_libraries(magpie_app_tests PRIVATE magpie_app Qt6::Test magpie_warnings Catch2::Catch2)
+	# See render/CMakeLists.txt
+	target_compile_options(magpie_app_tests PRIVATE -Wno-missing-field-initializers)
+	catch_discover_tests(magpie_app_tests PROPERTIES LABELS app)
+endif()

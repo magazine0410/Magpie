@@ -33,6 +33,7 @@ endforeach()
 
 add_library(magpie_engine STATIC
 	PipeWireFrameSource.cpp
+	ScalingService.cpp
 	ScalingSession.cpp
 	ScalingSurface.cpp
 	${GENERATED}
