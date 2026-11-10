@@ -13,6 +13,7 @@
 // QT_QPA_PLATFORM=xcb, which is how Wine games appear.
 //
 // Usage: testsource [--size WxH] [--duration seconds] [--title text] [--no-focus] [--frameless]
+//                   [--resizable] [--static] [--message text]
 #include <QCommandLineParser>
 #include <QElapsedTimer>
 #include <QGuiApplication>
@@ -197,6 +198,7 @@ int main(int argc, char* argv[]) {
 	parser.addOption({ "title", "Window title.", "text", "Magpie test source" });
 	parser.addOption({ "no-focus", "Do not take keyboard focus when shown." });
 	parser.addOption({ "frameless", "No title bar or border." });
+	parser.addOption({ "resizable", "Let the window be resized (the default is a fixed size)." });
 	parser.addOption({ "static", "Do not animate: the window content stays unchanged." });
 	parser.addOption({ "message", "Text shown in the window.", "text" });
 	parser.process(app);
@@ -221,8 +223,10 @@ int main(int argc, char* argv[]) {
 	window.setFlags(flags);
 	window.resize(size[0].toInt(), size[1].toInt());
 	// A game does not resize itself; fixed size also keeps the scale factor stable.
-	window.setMinimumSize(window.size());
-	window.setMaximumSize(window.size());
+	if (!parser.isSet("resizable")) {
+		window.setMinimumSize(window.size());
+		window.setMaximumSize(window.size());
+	}
 	window.show();
 
 	std::printf("started platform=%s\n", qPrintable(QGuiApplication::platformName()));

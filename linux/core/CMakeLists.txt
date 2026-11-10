@@ -2,6 +2,7 @@
 add_library(magpie_core STATIC
 	Logger.cpp
 	Paths.cpp
+	ProfileOptions.cpp
 	ScalingOptions.cpp
 	Settings.cpp
 	SettingsJson.cpp

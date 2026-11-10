@@ -1,5 +1,4 @@
 #include "PortalCapture.h"
-#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -8,11 +7,13 @@
 #include <fmt/format.h>
 #include <systemd/sd-bus.h>
 #include "Logger.h"
+#include "PortalRequest.h"
 
 namespace Magpie {
 
-static constexpr const char* PORTAL_NAME = "org.freedesktop.portal.Desktop";
-static constexpr const char* PORTAL_PATH = "/org/freedesktop/portal/desktop";
+using PortalRequest::PORTAL_NAME;
+using PortalRequest::PORTAL_PATH;
+using PortalRequest::ReadStringVariant;
 static constexpr const char* SCREENCAST_INTERFACE = "org.freedesktop.portal.ScreenCast";
 
 // Restore tokens exist from this version of the interface on
@@ -30,10 +31,6 @@ using BusPtr = std::unique_ptr<sd_bus, BusDeleter>;
 // What the portal answers to a request. Which members are filled depends on
 // the request.
 struct Response {
-	bool hasArrived = false;
-	// 0: success, 1: the user cancelled, 2: ended in another way
-	uint32_t code = 2;
-
 	std::string sessionHandle;
 	std::string restoreToken;
 	bool hasStream = false;
@@ -41,22 +38,6 @@ struct Response {
 	uint32_t sourceType = 0;
 	Size size;
 };
-
-// The read position is at a variant. Reads it if it holds a string or an
-// object path, and steps over it otherwise.
-void ReadStringVariant(sd_bus_message* message, std::string& value) noexcept {
-	char type = 0;
-	const char* contents = nullptr;
-	if (sd_bus_message_peek_type(message, &type, &contents) > 0 && type == 'v' && contents &&
-		(std::strcmp(contents, "s") == 0 || std::strcmp(contents, "o") == 0)) {
-		const char* text = nullptr;
-		if (sd_bus_message_read(message, "v", contents, &text) >= 0 && text) {
-			value = text;
-		}
-	} else {
-		sd_bus_message_skip(message, "v");
-	}
-}
 
 // The read position is at the variant of "streams": a(ua{sv}), one entry per
 // stream with its PipeWire node and properties. One source is asked for, so
@@ -104,38 +85,6 @@ void ReadStreams(sd_bus_message* message, Response& response) noexcept {
 	sd_bus_message_exit_container(message);
 }
 
-// org.freedesktop.portal.Request.Response: (u response, a{sv} results)
-int OnResponse(sd_bus_message* message, void* userData, sd_bus_error*) noexcept {
-	Response& response = *(Response*)userData;
-	response.hasArrived = true;
-
-	if (sd_bus_message_read(message, "u", &response.code) < 0) {
-		response.code = 2;
-		return 0;
-	}
-
-	if (sd_bus_message_enter_container(message, 'a', "{sv}") <= 0) {
-		return 0;
-	}
-	while (sd_bus_message_enter_container(message, 'e', "sv") > 0) {
-		const char* key = nullptr;
-		sd_bus_message_read(message, "s", &key);
-
-		if (key && std::strcmp(key, "session_handle") == 0) {
-			ReadStringVariant(message, response.sessionHandle);
-		} else if (key && std::strcmp(key, "restore_token") == 0) {
-			ReadStringVariant(message, response.restoreToken);
-		} else if (key && std::strcmp(key, "streams") == 0) {
-			ReadStreams(message, response);
-		} else {
-			sd_bus_message_skip(message, "v");
-		}
-		sd_bus_message_exit_container(message);
-	}
-	sd_bus_message_exit_container(message);
-	return 0;
-}
-
 // Calls a method of the screen cast interface that answers through a request
 // object, and waits for the answer; with the Start method that is until the
 // user has closed the dialog. `appendArguments` adds the method's arguments,
@@ -146,72 +95,23 @@ bool CallRequest(
 	const std::function<int(sd_bus_message*, const char*)>& appendArguments,
 	Response& response
 ) noexcept {
-	// The portal creates the request object at a path made of the caller's
-	// bus name and a token of the caller's choice. Subscribing before the
-	// call makes sure the answer is not missed.
-	const char* uniqueName = nullptr;
-	if (sd_bus_get_unique_name(bus, &uniqueName) < 0 || !uniqueName || uniqueName[0] != ':') {
-		Logger::Get().Error("The D-Bus connection has no name");
-		return false;
-	}
-	std::string sender = uniqueName + 1;
-	std::replace(sender.begin(), sender.end(), '.', '_');
-
-	static uint32_t tokenCount = 0;
-	const std::string token = fmt::format("magpie{}_{}", getpid(), ++tokenCount);
-	const std::string requestPath = fmt::format("/org/freedesktop/portal/desktop/request/{}/{}", sender, token);
-
-	sd_bus_slot* slot = nullptr;
-	sd_bus_message* call = nullptr;
-	sd_bus_message* reply = nullptr;
-	sd_bus_error error = SD_BUS_ERROR_NULL;
-
-	// The path names this request alone, so the sender needs no check
-	int result = sd_bus_match_signal(bus, &slot, nullptr, requestPath.c_str(),
-		"org.freedesktop.portal.Request", "Response", OnResponse, &response);
-	if (result >= 0) {
-		result = sd_bus_message_new_method_call(bus, &call, PORTAL_NAME, PORTAL_PATH, SCREENCAST_INTERFACE, method);
-	}
-	if (result >= 0) {
-		result = appendArguments(call, token.c_str());
-	}
-	if (result >= 0) {
-		result = sd_bus_call(bus, call, 0, &error, &reply);
-	}
-
-	if (result < 0) {
-		Logger::Get().Error(fmt::format("The portal call {} failed: {}", method,
-			error.message ? error.message : std::strerror(-result)));
-	} else {
-		while (!response.hasArrived) {
-			result = sd_bus_process(bus, nullptr);
-			if (result == 0) {
-				result = sd_bus_wait(bus, UINT64_MAX);
+	const PortalRequest::Outcome outcome = PortalRequest::Call(bus, SCREENCAST_INTERFACE, method, appendArguments,
+		[&](const char* key, sd_bus_message* message) {
+			if (std::strcmp(key, "session_handle") == 0) {
+				ReadStringVariant(message, response.sessionHandle);
+			} else if (std::strcmp(key, "restore_token") == 0) {
+				ReadStringVariant(message, response.restoreToken);
+			} else if (std::strcmp(key, "streams") == 0) {
+				ReadStreams(message, response);
+			} else {
+				sd_bus_message_skip(message, "v");
 			}
-			if (result < 0 && result != -EINTR) {
-				Logger::Get().Error(fmt::format("Waiting for the portal failed: {}", std::strerror(-result)));
-				break;
-			}
-		}
-	}
+		});
 
-	sd_bus_error_free(&error);
-	sd_bus_message_unref(reply);
-	sd_bus_message_unref(call);
-	sd_bus_slot_unref(slot);
-
-	if (!response.hasArrived) {
-		return false;
-	}
-	if (response.code == 1) {
+	if (outcome == PortalRequest::Outcome::Cancelled) {
 		Logger::Get().Error("The screen cast was cancelled in the portal's dialog");
-		return false;
 	}
-	if (response.code != 0) {
-		Logger::Get().Error(fmt::format("The portal ended the request {} without a result", method));
-		return false;
-	}
-	return true;
+	return outcome == PortalRequest::Outcome::Success;
 }
 
 bool ReadInfo(sd_bus* bus, PortalCapture::Info& info) noexcept {

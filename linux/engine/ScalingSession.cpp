@@ -1,6 +1,8 @@
 #include "ScalingSession.h"
 #include <algorithm>
 #include <fstream>
+#include <optional>
+#include <sstream>
 #include <poll.h>
 #include <fmt/format.h>
 #include "KWinBridge.h"
@@ -44,6 +46,9 @@ void ScalingSession::_WriteStateFile() const noexcept {
 		<< "window " << _windowId << '\n'
 		<< "frame " << frame.left << ' ' << frame.top << ' ' << frame.right << ' ' << frame.bottom << '\n'
 		<< "noBorder " << (_original.hasNoBorder ? 1 : 0) << '\n';
+	for (const KWinPointerSpeed::Device& device : _pointerDevices) {
+		file << "pointer " << device.sysName << ' ' << device.acceleration << '\n';
+	}
 	if (!file) {
 		Logger::Get().Warn(fmt::format("The state file {} could not be written", _config.stateFile.string()));
 	}
@@ -55,23 +60,48 @@ void ScalingSession::RecoverAfterCrash(KWinBridge& bridge, const std::filesystem
 		return;
 	}
 
-	std::string header, key, windowId;
+	std::string header, windowId;
 	Rect frame;
 	int noBorder = 0;
+	bool hasWindow = false, hasFrame = false;
+	std::vector<KWinPointerSpeed::Device> pointerDevices;
+
 	std::getline(file, header);
-	file >> key >> windowId;
-	file >> key >> frame.left >> frame.top >> frame.right >> frame.bottom;
-	file >> key >> noBorder;
-	const bool isValid = (bool)file && header == STATE_FILE_HEADER;
+	if (header == STATE_FILE_HEADER) {
+		std::string line;
+		while (std::getline(file, line)) {
+			std::istringstream stream(line);
+			std::string key;
+			stream >> key;
+			if (key == "window") {
+				hasWindow = (bool)(stream >> windowId);
+			} else if (key == "frame") {
+				hasFrame = (bool)(stream >> frame.left >> frame.top >> frame.right >> frame.bottom);
+			} else if (key == "noBorder") {
+				stream >> noBorder;
+			} else if (key == "pointer") {
+				KWinPointerSpeed::Device device;
+				if (stream >> device.sysName >> device.acceleration) {
+					pointerDevices.push_back(std::move(device));
+				}
+			}
+		}
+	}
 	file.close();
 
-	if (isValid) {
+	if (hasWindow && hasFrame) {
 		bridge.ListWindows();
 		WindowInfo info;
 		if (bridge.GetWindow(windowId, info)) {
 			Logger::Get().Warn("Scaling did not end properly last time; putting the window back");
 			bridge.PlaceWindow(windowId, { frame, noBorder != 0, false });
 		}
+	}
+	if (!pointerDevices.empty()) {
+		// Whether they were changed when the program ended is not known;
+		// setting them again does no harm
+		Logger::Get().Warn("Scaling did not end properly last time; restoring the pointer speed");
+		KWinPointerSpeed::Apply(pointerDevices);
 	}
 
 	std::error_code ec;
@@ -168,6 +198,18 @@ ScalingError ScalingSession::Start(
 	_stepTimer.Initialize(options.minFrameRate, options.maxFrameRate);
 	_wakeFds = { _surface->EventFd(), _frameSource->EventFd(), _bridge->EventFd(), _capture->EventFd() };
 
+	// "Keep screen on" and "simulate exclusive fullscreen" of the Windows
+	// version. A desktop that cannot do them is no reason not to scale.
+	if (options.IsKeepScreenOn() || options.IsSimulateExclusiveFullscreen()) {
+		_inhibitor = std::make_unique<SessionInhibitor>();
+		if (options.IsKeepScreenOn()) {
+			_inhibitor->KeepScreenOn("A window is scaled");
+		}
+		if (options.IsSimulateExclusiveFullscreen()) {
+			_inhibitor->SuppressNotifications(config.appId, "A window is scaled to fullscreen");
+		}
+	}
+
 	// The first frame is there already
 	_hasNewFrame = true;
 	_isRunning = true;
@@ -193,6 +235,8 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 	}
 
 	const Size sourceSize{ _original.clientRect.Width(), _original.clientRect.Height() };
+	Logger::Get().Info(fmt::format("The window has a frame of {}x{} and a content of {}x{}",
+		_original.frameRect.Width(), _original.frameRect.Height(), sourceSize.width, sourceSize.height));
 	if (sourceSize.width < ScalingGeometry::MIN_SRC_SIZE || sourceSize.height < ScalingGeometry::MIN_SRC_SIZE) {
 		Logger::Get().Error("The window is too small to scale");
 		error = ScalingError::InvalidSourceWindow;
@@ -219,6 +263,10 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 	_padRight = plan.padRight;
 	const Size outputSize = plan.size;
 	const Point position = plan.position;
+
+	if (_options.IsAdjustCursorSpeed()) {
+		_pointerDevices = KWinPointerSpeed::ReadDevices();
+	}
 
 	// Noted before the desktop is changed, so that a crash can be undone
 	_WriteStateFile();
@@ -427,10 +475,13 @@ bool ScalingSession::_TrackSource() noexcept {
 	};
 	if (info.isFullscreen || info.isMaximized ||
 		info.frameRect.Width() != expected.Width() || info.frameRect.Height() != expected.Height()) {
+		Logger::Get().Info(fmt::format("The source is now {}x{}{}{}", info.frameRect.Width(), info.frameRect.Height(),
+			info.isFullscreen ? ", fullscreen" : "", info.isMaximized ? ", maximized" : ""));
 		_endReason = EndReason::SourceResized;
 		return false;
 	}
 	if (info.frameRect != expected) {
+		Logger::Get().Info(fmt::format("The source is now at {},{}", info.frameRect.left, info.frameRect.top));
 		_endReason = EndReason::SourceMoved;
 		return false;
 	}
@@ -468,6 +519,7 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 
 	if (cursor.isVisible) {
 		// Captured. Inside the source nothing is to be done.
+		_SetPointerSlowed(true, destRect);
 		if (Contains(_sourceRect, cursor.pos)) {
 			_handledRingPos = { -1, -1 };
 			return;
@@ -486,6 +538,7 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 		const Point target{ _output.rect.left + scaled.x, _output.rect.top + scaled.y };
 		for (const OutputInfo& other : _otherOutputs) {
 			if (Contains(other.rect, target)) {
+				_SetPointerSlowed(false, destRect);
 				_bridge->MovePointer(target);
 				++_statistics.pointerReleases;
 				return;
@@ -514,9 +567,36 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 		const Rect& srcRect = _frameSource->SrcRect();
 		const Point onPicture = ClampTo(_surface->PointerPos(), destRect);
 		const Point onSource = ClampTo(ScalingGeometry::ScalingToSrc(onPicture, srcRect, destRect), srcRect);
+		_SetPointerSlowed(true, destRect);
 		_bridge->MovePointer({ origin.x + onSource.x, origin.y + onSource.y });
 		++_statistics.pointerCaptures;
 	}
+}
+
+// Port of CursorManager::_AdjustCursorSpeed and _RestoreCursorSpeed
+void ScalingSession::_SetPointerSlowed(bool slowed, const Rect& destRect) noexcept {
+	if (_pointerDevices.empty() || slowed == _isPointerSlowed) {
+		return;
+	}
+	_isPointerSlowed = slowed;
+
+	if (!slowed) {
+		KWinPointerSpeed::Apply(_pointerDevices);
+		return;
+	}
+
+	// On the virtual output the pointer moves in pixels of the source, which
+	// the picture shows enlarged. Slowed by that factor it moves over the
+	// picture as fast as over the rest of the desktop.
+	const Rect& srcRect = _frameSource->SrcRect();
+	const double scale = ((double)destRect.Width() / srcRect.Width() +
+		(double)destRect.Height() / srcRect.Height()) / 2;
+
+	std::vector<KWinPointerSpeed::Device> devices = _pointerDevices;
+	for (KWinPointerSpeed::Device& device : devices) {
+		device.acceleration = KWinPointerSpeed::Slowed(device.acceleration, scale);
+	}
+	KWinPointerSpeed::Apply(devices);
 }
 
 bool ScalingSession::_Render(bool runEffects) noexcept {
@@ -594,13 +674,38 @@ void ScalingSession::Stop() noexcept {
 		_bridge->MovePointer({ _output.rect.left + scaled.x, _output.rect.top + scaled.y });
 	}
 
+	if (_isPointerSlowed) {
+		_isPointerSlowed = false;
+		KWinPointerSpeed::Apply(_pointerDevices);
+	}
+
+	// Set if the window has another size than before scaling
+	std::optional<KWinBridge::Placement> placeAgain;
+
 	// The window goes back while the picture still covers the monitor, and
 	// before its output disappears
 	if (_isWindowMoved) {
 		_bridge->ListWindows();
 		WindowInfo info;
 		if (_bridge->GetWindow(_windowId, info)) {
-			_bridge->PlaceWindow(_windowId, { _original.frameRect, _original.hasNoBorder, info.isActive });
+			// The place it had, with the size it has now: the window may
+			// have been resized while it was scaled. It has no border there,
+			// so its frame is its content.
+			Rect frame = _original.frameRect;
+			frame.right += info.frameRect.Width() - _sourceRect.Width();
+			frame.bottom += info.frameRect.Height() - _sourceRect.Height();
+			Logger::Get().Info(fmt::format("Putting the window back: it is {}x{}, and goes to {},{} with {}x{}",
+				info.frameRect.Width(), info.frameRect.Height(), frame.left, frame.top, frame.Width(), frame.Height()));
+			const KWinBridge::Placement placement{
+				.frameRect = frame,
+				.noBorder = _original.hasNoBorder,
+				.activate = info.isActive,
+				.setGeometry = !info.isFullscreen && !info.isMaximized
+			};
+			_bridge->PlaceWindow(_windowId, placement);
+			if (placement.setGeometry && frame != _original.frameRect) {
+				placeAgain = placement;
+			}
 		}
 		_isWindowMoved = false;
 	}
@@ -614,6 +719,14 @@ void ScalingSession::Stop() noexcept {
 	_frameSource.reset();
 	// Removes the virtual output
 	_capture.reset();
+	_inhibitor.reset();
+
+	// When an output goes away, KWin gives the windows the geometry they had
+	// before that output existed. That is the old size of a window that was
+	// resized while it was scaled, so its new size is set once more.
+	if (placeAgain) {
+		_bridge->PlaceWindow(_windowId, *placeAgain);
+	}
 
 	if (!_config.stateFile.empty()) {
 		std::error_code ec;
@@ -621,8 +734,10 @@ void ScalingSession::Stop() noexcept {
 	}
 
 	if (_isRunning) {
-		Logger::Get().Info(fmt::format("Scaling ended: {} frames scaled, {} presented",
-			_statistics.scaledFrames, _statistics.presentedFrames));
+		Logger::Get().Info(fmt::format("Scaling ended: {} frames scaled, {} presented; "
+			"the pointer went to the source {} times and to another monitor {} times",
+			_statistics.scaledFrames, _statistics.presentedFrames,
+			_statistics.pointerCaptures, _statistics.pointerReleases));
 	}
 	_isRunning = false;
 	_bridge = nullptr;

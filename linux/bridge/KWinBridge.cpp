@@ -645,14 +645,16 @@ bool KWinBridge::PlaceWindow(const std::string& windowId, const Placement& place
 for (const w of workspace.windowList()) {{
 	if (w.internalId.toString() === "{}") {{
 		w.noBorder = {};
-		w.frameGeometry = {{ x: {}, y: {}, width: {}, height: {} }};
+		if ({}) {{
+			w.frameGeometry = {{ x: {}, y: {}, width: {}, height: {} }};
+		}}
 		if ({}) {{
 			workspace.activeWindow = w;
 		}}
 	}}
 }}
-)", windowId, placement.noBorder ? "true" : "false", rect.left, rect.top, rect.Width(), rect.Height(),
-		placement.activate ? "true" : "false");
+)", windowId, placement.noBorder ? "true" : "false", placement.setGeometry ? "true" : "false",
+		rect.left, rect.top, rect.Width(), rect.Height(), placement.activate ? "true" : "false");
 
 	if (!_RunScript(script)) {
 		return false;
@@ -670,7 +672,8 @@ for (const w of workspace.windowList()) {{
 			Logger::Get().Error("The window to place does not exist");
 			return false;
 		}
-		if (window->info.frameRect == rect && window->info.hasNoBorder == placement.noBorder &&
+		if ((!placement.setGeometry || window->info.frameRect == rect) &&
+			window->info.hasNoBorder == placement.noBorder &&
 			(!placement.activate || window->info.isActive)) {
 			return true;
 		}

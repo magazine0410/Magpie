@@ -19,9 +19,11 @@
 #include "CursorDrawer.h"
 #include "EffectChain.h"
 #include "Geometry.h"
+#include "KWinPointerSpeed.h"
 #include "LayerSurface.h"
 #include "PipeWireFrameSource.h"
 #include "ScalingOptions.h"
+#include "SessionInhibitor.h"
 #include "StepTimer.h"
 #include "Swapchain.h"
 #include "VulkanDevice.h"
@@ -57,6 +59,8 @@ public:
 		std::filesystem::path stateFile;
 		VkPresentModeKHR presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
 		bool validation = false;
+		// Under which the desktop knows the program
+		std::string appId;
 	};
 
 	struct Statistics {
@@ -153,6 +157,10 @@ private:
 
 	void _UpdatePointer(const Rect& destRect) noexcept;
 
+	// Slows the pointer devices down by the scale of the picture while the
+	// pointer acts on the source, and gives them their own speed otherwise
+	void _SetPointerSlowed(bool slowed, const Rect& destRect) noexcept;
+
 	bool _Render(bool runEffects) noexcept;
 
 	Rect _DestRect() const noexcept;
@@ -183,6 +191,8 @@ private:
 	// The source window on the virtual output, relative to that output
 	Rect _sourceRect;
 
+	// Keeping the screen on and notifications away, if the options ask for it
+	std::unique_ptr<SessionInhibitor> _inhibitor;
 	std::unique_ptr<CaptureSession> _capture;
 	std::unique_ptr<PipeWireFrameSource> _frameSource;
 	std::unique_ptr<LayerSurface> _surface;
@@ -201,6 +211,11 @@ private:
 	// position is acted on once
 	Point _handledRingPos{ -1, -1 };
 	std::chrono::steady_clock::time_point _lastCaptureTime;
+
+	// The pointer devices with the speed they had before scaling; empty if
+	// the speed is not to be adjusted
+	std::vector<KWinPointerSpeed::Device> _pointerDevices;
+	bool _isPointerSlowed = false;
 
 	StepTimerStatus _stepStatus = StepTimerStatus::WaitingForNewFrame;
 	bool _hasNewFrame = false;

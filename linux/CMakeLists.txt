@@ -16,6 +16,11 @@ set(MAGPIE_EFFECTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src/Effects")
 
 option(MAGPIE_WARNINGS_AS_ERRORS "Fail the build on compiler warnings" ON)
 
+# Names the program to the desktop: its D-Bus service, its .desktop file, and
+# the entry under which the desktop lists its shortcuts
+set(MAGPIE_APP_ID "io.github.magazine0410.Magpie" CACHE STRING "Application ID")
+string(REPLACE "." "/" MAGPIE_OBJECT_PATH "/${MAGPIE_APP_ID}")
+
 # Applied to Magpie's own targets, not to third-party code.
 add_library(magpie_warnings INTERFACE)
 target_compile_options(magpie_warnings INTERFACE -Wall -Wextra)
@@ -41,6 +46,8 @@ add_subdirectory(tools/magpie-scale-image)
 add_subdirectory(tools/magpie-present-test)
 add_subdirectory(tools/magpie-viewer)
 add_subdirectory(tools/magpie-scale)
+add_subdirectory(tools/magpie-engine)
+add_subdirectory(tools/magpie-ctl)
 
 include(CTest)
 if(BUILD_TESTING)

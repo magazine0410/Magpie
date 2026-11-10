@@ -29,7 +29,11 @@ endforeach()
 add_library(magpie_bridge STATIC
 	Bridge.cpp
 	KWinBridge.cpp
+	KWinPointerSpeed.cpp
 	PortalCapture.cpp
+	PortalRequest.cpp
+	PortalShortcuts.cpp
+	SessionInhibitor.cpp
 	${GENERATED}
 )
 
@@ -39,7 +43,8 @@ target_include_directories(magpie_bridge
 )
 target_link_libraries(magpie_bridge
 	PUBLIC magpie_core
-	PRIVATE PkgConfig::WAYLAND_CLIENT PkgConfig::LIBSYSTEMD magpie_warnings
+	PUBLIC PkgConfig::LIBSYSTEMD
+	PRIVATE PkgConfig::WAYLAND_CLIENT magpie_warnings
 )
 # The listener structures of the Wayland protocols are filled with designated
 # initializers; see render/CMakeLists.txt

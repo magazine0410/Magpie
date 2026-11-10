@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Magpie
+Comment=Scales windows with a choice of scaling algorithms
+Exec=$<TARGET_FILE:magpie-engine>
+Terminal=false
+NoDisplay=true
+Categories=Utility;
+# KWin interfaces the program uses, for KWin builds that only offer them to
+# programs that name them here
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,zkde_screencast_unstable_v1,org_kde_kwin_fake_input

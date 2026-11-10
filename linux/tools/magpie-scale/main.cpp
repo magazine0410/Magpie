@@ -53,12 +53,19 @@ static void PrintUsage() {
 		"  --cursor-scale F   size of the cursor relative to its own (default 1); 0\n"
 		"                     scales it like the source\n"
 		"  --cursor-bilinear  interpolate the scaled cursor\n"
+		"  --adjust-cursor-speed  slow the pointer down by the scale of the picture\n"
+		"                     while it is on the picture. This changes the speed\n"
+		"                     setting of the pointer devices and restores it afterwards.\n"
 		"\n"
 		"Rendering:\n"
 		"  --present-mode M   mailbox (default), fifo or immediate\n"
 		"  --max-fps N        frame rate limit\n"
 		"  --min-fps N        frames are repeated to keep this rate\n"
 		"  --validate         use the Vulkan validation layers\n"
+		"\n"
+		"Desktop:\n"
+		"  --keep-screen-on   ask the desktop not to blank the screen while scaling\n"
+		"  --quiet            ask the desktop to hold back notifications while scaling\n"
 		"\n"
 		"Run:\n"
 		"  --seconds N        end after N seconds\n"
@@ -91,10 +98,24 @@ static const char* Describe(ScalingError error) {
 }
 
 int main(int argc, char* argv[]) {
+	// The signals that end the program arrive through a descriptor, so that
+	// the main loop can wait for them together with everything else. They
+	// are blocked before anything starts a thread, because a thread without
+	// the block would take them and end the program without clean-up.
+	sigset_t signals;
+	sigemptyset(&signals);
+	sigaddset(&signals, SIGINT);
+	sigaddset(&signals, SIGTERM);
+	sigprocmask(SIG_BLOCK, &signals, nullptr);
+	const int signalFd = signalfd(-1, &signals, SFD_NONBLOCK | SFD_CLOEXEC);
+
 	ScalingOptions options;
 	ScalingSession::Config config;
 	config.effectsDir = MAGPIE_DEFAULT_EFFECTS_DIR;
 	config.stateFile = Paths::StateDir() / "scaling-state";
+	// Unlike in a profile, where it is on by default
+	options.IsAdjustCursorSpeed(false);
+	config.appId = MAGPIE_APP_ID;
 
 	const char* configFile = nullptr;
 	const char* modeName = nullptr;
@@ -160,6 +181,8 @@ int main(int argc, char* argv[]) {
 			options.cursorScaleFactor = number(0.0f);
 		} else if (arg == "--cursor-bilinear") {
 			options.cursorInterpolationMode = CursorInterpolationMode::Bilinear;
+		} else if (arg == "--adjust-cursor-speed") {
+			options.IsAdjustCursorSpeed(true);
 		} else if (arg == "--present-mode") {
 			const std::string_view mode = value();
 			if (mode == "fifo") {
@@ -177,6 +200,10 @@ int main(int argc, char* argv[]) {
 			options.minFrameRate = number(0.0f);
 		} else if (arg == "--validate") {
 			config.validation = true;
+		} else if (arg == "--keep-screen-on") {
+			options.IsKeepScreenOn(true);
+		} else if (arg == "--quiet") {
+			options.IsSimulateExclusiveFullscreen(true);
 		} else if (arg == "--seconds") {
 			seconds = number(0.0f);
 		} else if (arg == "-v") {
@@ -207,15 +234,6 @@ int main(int argc, char* argv[]) {
 	if (options.effects.empty()) {
 		options.effects.push_back({ .name = "Bilinear", .scalingType = ScalingType::Fit });
 	}
-
-	// The signals that end scaling arrive through a descriptor, so that the
-	// loop below can wait for them together with everything else
-	sigset_t signals;
-	sigemptyset(&signals);
-	sigaddset(&signals, SIGINT);
-	sigaddset(&signals, SIGTERM);
-	sigprocmask(SIG_BLOCK, &signals, nullptr);
-	const int signalFd = signalfd(-1, &signals, SFD_NONBLOCK | SFD_CLOEXEC);
 
 	KWinBridge bridge;
 	if (!bridge.Initialize()) {

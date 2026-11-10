@@ -24,6 +24,9 @@ public:
 		bool noBorder = false;
 		// Also make it the active window
 		bool activate = false;
+		// False: only the decoration and the activation are changed, for a
+		// window whose place the desktop decides (maximized, fullscreen)
+		bool setGeometry = true;
 	};
 
 	KWinBridge() noexcept;

@@ -3,6 +3,7 @@ add_executable(magpie_tests
 	TestEffectCompiler.cpp
 	TestLogger.cpp
 	TestPaths.cpp
+	TestProfileOptions.cpp
 	TestScalingOptions.cpp
 	TestSettingsJson.cpp
 	TestSettingsStore.cpp
