@@ -99,6 +99,11 @@ public:
 	// Relative to the surface; valid while the pointer is inside
 	Point PointerPos() const noexcept;
 
+	// Whether the pointer has the arrow of the desktop on this surface. It
+	// is hidden by default; the arrow is for the times when the pointer
+	// stays on the surface, to operate the toolbar for example.
+	void SetCursorShown(bool shown) noexcept;
+
 	// Counts the times the pointer came onto the surface or moved on it
 	uint32_t PointerMotionCount() const noexcept;
 

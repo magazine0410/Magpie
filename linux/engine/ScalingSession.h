@@ -23,6 +23,7 @@
 #include "EffectChain.h"
 #include "Geometry.h"
 #include "KWinPointerSpeed.h"
+#include "OverlayDrawer.h"
 #include "PipeWireFrameSource.h"
 #include "ScalingOptions.h"
 #include "ScalingSurface.h"
@@ -52,6 +53,11 @@ public:
 		FocusLost,
 		// The user closed the window of windowed scaling
 		WindowClosed,
+		// The user pressed the stop button of the toolbar
+		UserStopped,
+		// The user asked for the other way of scaling with the toolbar; the
+		// caller starts it
+		ModeSwitchRequested,
 		CaptureFailed,
 		Failed
 	};
@@ -66,6 +72,9 @@ public:
 		bool validation = false;
 		// Under which the desktop knows the program
 		std::string appId;
+		// The file with the icons of the toolbar; without it the buttons
+		// carry text
+		std::filesystem::path iconFontPath;
 		// The width the picture of the last windowed scaling had, to start
 		// with it again; zero: the size comes from the options
 		int32_t lastWindowedWidth = 0;
@@ -167,6 +176,17 @@ public:
 	// goes to the log. Returns false if no picture could be taken.
 	bool TakeScreenshot(std::optional<uint32_t> effectIndex = std::nullopt) noexcept;
 
+	// What the toolbar shortcut does: from off to always shown to shown when
+	// the pointer is near, and to off again. Port of
+	// Renderer::SwitchToolbarState.
+	void SwitchToolbarState() noexcept;
+
+	// With the places the user gave the windows of the overlay; to be saved
+	// when scaling has ended, as the Windows version does
+	const OverlayOptions& GetOverlayOptions() const noexcept {
+		return _options.overlayOptions;
+	}
+
 	bool IsRunning() const noexcept {
 		return _isRunning;
 	}
@@ -247,6 +267,12 @@ private:
 
 	void _UpdatePointer(const Rect& destRect) noexcept;
 
+	// Passes the pointer on to the overlay, lays the overlay out and carries
+	// out what its buttons ask for. False when scaling has to end; sets
+	// _endReason. `needsRedraw`: the overlay looks different than in the
+	// last frame.
+	bool _UpdateOverlay(const Rect& destRect, bool& needsRedraw) noexcept;
+
 	// Sends the pointer from the source to where its picture is on the desktop
 	void _ReleasePointerToPicture(const Rect& destRect) noexcept;
 
@@ -310,6 +336,15 @@ private:
 	Rect _rendererRect;
 	std::unique_ptr<EffectChain> _chain;
 	std::unique_ptr<CursorDrawer> _cursorDrawer;
+	// Toolbar and profiler; null in 3D game mode, which has neither
+	std::unique_ptr<OverlayDrawer> _overlay;
+	// The pointer as the overlay last saw it
+	std::optional<Point> _overlayMousePos;
+	// Buttons that are down on the overlay
+	bool _overlayButtons[2]{};
+	float _overlayWheel = 0.0f;
+	bool _isOverlayRedrawForced = false;
+	std::chrono::steady_clock::time_point _lastOverlayReleaseTime;
 	StepTimer _stepTimer;
 	std::vector<int> _wakeFds;
 

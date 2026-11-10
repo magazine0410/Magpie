@@ -29,6 +29,7 @@ add_executable(magpie_render_tests
 	TestCursorDrawer.cpp
 	TestDmabuf.cpp
 	TestDuplicateFrames.cpp
+	TestOverlayDrawer.cpp
 	TestRenderBasics.cpp
 	TestRenderer.cpp
 	TestScreenshot.cpp
@@ -39,6 +40,7 @@ target_link_libraries(magpie_render_tests PRIVATE magpie_render magpie_warnings 
 target_compile_definitions(magpie_render_tests PRIVATE
 	MAGPIE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
 	MAGPIE_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"
+	MAGPIE_ICON_FONT="${MAGPIE_ICON_FONT}"
 )
 # See render/CMakeLists.txt
 target_compile_options(magpie_render_tests PRIVATE -Wno-missing-field-initializers)

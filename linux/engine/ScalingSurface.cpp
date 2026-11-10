@@ -1,11 +1,13 @@
 #include "ScalingSurface.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <linux/input-event-codes.h>
 #include <poll.h>
 #include <utility>
 #include <vector>
 #include <wayland-client.h>
+#include <wayland-cursor.h>
 #include "Logger.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
@@ -36,6 +38,13 @@ struct ScalingSurface::State {
 	zxdg_decoration_manager_v1* decorationManager = nullptr;
 	wl_seat* seat = nullptr;
 	wl_pointer* pointer = nullptr;
+	wl_shm* shm = nullptr;
+	// The arrow of the desktop's cursor theme, loaded when it is first shown
+	wl_cursor_theme* cursorTheme = nullptr;
+	wl_surface* cursorSurface = nullptr;
+	Point cursorHotSpot;
+	bool isCursorShown = false;
+	uint32_t pointerEnterSerial = 0;
 	std::vector<std::unique_ptr<Output>> outputs;
 
 	wl_surface* surface = nullptr;
@@ -56,6 +65,52 @@ struct ScalingSurface::State {
 	Point pointerPos;
 	uint32_t pointerMotionCount = 0;
 	std::vector<PointerEvent> pointerEvents;
+
+	bool LoadCursor() noexcept {
+		if (cursorSurface) {
+			return true;
+		}
+		if (!shm) {
+			return false;
+		}
+
+		// The library reads XCURSOR_THEME itself when the name is null
+		int size = 24;
+		if (const char* value = std::getenv("XCURSOR_SIZE")) {
+			size = std::max(std::atoi(value), 8);
+		}
+		cursorTheme = wl_cursor_theme_load(nullptr, size, shm);
+		if (!cursorTheme) {
+			return false;
+		}
+		wl_cursor* cursor = wl_cursor_theme_get_cursor(cursorTheme, "default");
+		if (!cursor) {
+			cursor = wl_cursor_theme_get_cursor(cursorTheme, "left_ptr");
+		}
+		if (!cursor || cursor->image_count == 0) {
+			return false;
+		}
+
+		wl_cursor_image* image = cursor->images[0];
+		cursorHotSpot = { (int32_t)image->hotspot_x, (int32_t)image->hotspot_y };
+		cursorSurface = wl_compositor_create_surface(compositor);
+		wl_surface_attach(cursorSurface, wl_cursor_image_get_buffer(image), 0, 0);
+		wl_surface_damage(cursorSurface, 0, 0, (int32_t)image->width, (int32_t)image->height);
+		wl_surface_commit(cursorSurface);
+		return true;
+	}
+
+	// Gives the pointer the image it is to have on this surface
+	void ApplyCursor() noexcept {
+		if (!pointer || !isPointerInside) {
+			return;
+		}
+		if (isCursorShown && LoadCursor()) {
+			wl_pointer_set_cursor(pointer, pointerEnterSerial, cursorSurface, cursorHotSpot.x, cursorHotSpot.y);
+		} else {
+			wl_pointer_set_cursor(pointer, pointerEnterSerial, nullptr, 0, 0);
+		}
+	}
 
 	void SetOpaqueRegion() noexcept {
 		// Nothing shows through; the compositor need not draw what is below
@@ -112,14 +167,14 @@ struct ScalingSurface::State {
 	};
 
 	static constexpr wl_pointer_listener POINTER_LISTENER{
-		.enter = [](void* data, wl_pointer* pointer, uint32_t serial, wl_surface*, wl_fixed_t x, wl_fixed_t y) {
+		.enter = [](void* data, wl_pointer*, uint32_t serial, wl_surface*, wl_fixed_t x, wl_fixed_t y) {
 			State& state = *(State*)data;
 			state.isPointerInside = true;
 			state.pointerPos = { wl_fixed_to_int(x), wl_fixed_to_int(y) };
 			++state.pointerMotionCount;
 			state.pointerEvents.push_back({ PointerEvent::Type::Motion, state.pointerPos });
-			// No cursor image on this surface
-			wl_pointer_set_cursor(pointer, serial, nullptr, 0, 0);
+			state.pointerEnterSerial = serial;
+			state.ApplyCursor();
 		},
 		.leave = [](void* data, wl_pointer*, uint32_t, wl_surface*) {
 			State& state = *(State*)data;
@@ -226,6 +281,8 @@ struct ScalingSurface::State {
 			} else if (std::strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 				state.layerShell = (zwlr_layer_shell_v1*)wl_registry_bind(
 					registry, name, &zwlr_layer_shell_v1_interface, 1);
+			} else if (std::strcmp(interface, wl_shm_interface.name) == 0) {
+				state.shm = (wl_shm*)wl_registry_bind(registry, name, &wl_shm_interface, 1);
 			} else if (std::strcmp(interface, xdg_wm_base_interface.name) == 0) {
 				state.wmBase = (xdg_wm_base*)wl_registry_bind(registry, name, &xdg_wm_base_interface, 2);
 				xdg_wm_base_add_listener(state.wmBase, &WM_BASE_LISTENER, nullptr);
@@ -376,6 +433,15 @@ Size ScalingSurface::GetSize() const noexcept {
 
 bool ScalingSurface::IsClosed() const noexcept {
 	return _state->isClosed;
+}
+
+void ScalingSurface::SetCursorShown(bool shown) noexcept {
+	if (_state->isCursorShown == shown) {
+		return;
+	}
+	_state->isCursorShown = shown;
+	_state->ApplyCursor();
+	wl_display_flush(_state->display);
 }
 
 bool ScalingSurface::IsSizeFixed() const noexcept {

@@ -108,6 +108,9 @@ ScalingError BuildScalingOptions(
 		options.autoHideCursorDelay = profile.autoHideCursorDelay;
 	}
 
+	// Where the user put the windows of the overlay
+	options.overlayOptions.windows = settings.overlayWindowOptions;
+
 	// The global settings
 	options.IsDeveloperMode(settings.isDeveloperMode);
 	options.IsDebugMode(settings.isDebugMode);

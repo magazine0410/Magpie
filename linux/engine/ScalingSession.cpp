@@ -4,6 +4,7 @@
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <utility>
 #include <poll.h>
 #include <unistd.h>
 #include <fmt/format.h>
@@ -207,6 +208,26 @@ ScalingError ScalingSession::Start(
 	_cursorDrawer = std::make_unique<CursorDrawer>();
 	if (!_cursorDrawer->Initialize(_device, _views[0].swapchain->Format())) {
 		return fail(ScalingError::ScalingFailedGeneral);
+	}
+
+	// Toolbar and profiler. 3D game mode has neither, as on Windows, and a
+	// desktop without a usable font is no reason not to scale.
+	if (!_options.Is3DGameMode()) {
+		_overlay = std::make_unique<OverlayDrawer>();
+		if (_overlay->Initialize(_device, _views[0].swapchain->Format(), {
+			.iconFontPath = config.iconFontPath,
+			.captureMethod = "Virtual output (PipeWire)",
+			.isWindowedMode = _options.IsWindowedMode(),
+			.isDeveloperMode = _options.IsDeveloperMode(),
+			.showDynamicDetectionStatistics = _options.IsStatisticsForDynamicDetectionEnabled() &&
+				_options.duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Dynamic
+		}, _options.overlayOptions, _chain->ActiveEffectDescs())) {
+			_overlay->SetToolbarState(_options.IsWindowedMode() ?
+				_options.windowedInitialToolbarState : _options.fullscreenInitialToolbarState);
+		} else {
+			Logger::Get().Warn("The toolbar is not available");
+			_overlay.reset();
+		}
 	}
 
 	// In benchmark mode every pass through the loop renders, whether the
@@ -719,6 +740,10 @@ bool ScalingSession::_UpdateSizes(bool& resized) noexcept {
 		return false;
 	}
 	_chainInput = _frameSource->Output();
+	if (_overlay) {
+		// With another size the chain may have another last effect
+		_overlay->UpdateAfterActiveEffectsChanged(_chain->ActiveEffectDescs());
+	}
 	return true;
 }
 
@@ -782,7 +807,12 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 			_stepStatus == StepTimerStatus::ForceNewFrame;
 	}
 
-	_UpdatePointer(_DestRect());
+	const Rect destRect = _DestRect();
+	bool overlayNeedsRedraw = false;
+	if (!_UpdateOverlay(destRect, overlayNeedsRedraw)) {
+		return false;
+	}
+	_UpdatePointer(destRect);
 
 	// The cursor to draw: that of the stream, unless it has rested for
 	// longer than the user allows
@@ -793,7 +823,7 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 
 	const bool cursorChanged = _cursor.isVisible != _drawnCursor.isVisible ||
 		(_cursor.isVisible && (_cursor.pos != _drawnCursor.pos || _cursor.imageSerial != _drawnCursor.imageSerial));
-	if (!runEffects && !cursorChanged) {
+	if (!runEffects && !cursorChanged && !overlayNeedsRedraw) {
 		return true;
 	}
 
@@ -801,7 +831,140 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 		_endReason = EndReason::Failed;
 		return false;
 	}
+	if (runEffects && _chain->Profiler().IsProfiling()) {
+		// The frame has been executed; its timings are shown with the next one
+		_chain->Profiler().QueryTimings();
+	}
 	return true;
+}
+
+bool ScalingSession::_UpdateOverlay(const Rect& destRect, bool& needsRedraw) noexcept {
+	needsRedraw = std::exchange(_isOverlayRedrawForced, false);
+
+	// What the pointer did on the surfaces. It is taken in any case, so that
+	// nothing piles up.
+	bool hasInput = false;
+	SmallVector<std::pair<int, bool>, 4> buttonEvents;
+	const auto addButtonEvent = [&](int button, bool isDown) {
+		if (_overlayButtons[button] != isDown) {
+			_overlayButtons[button] = isDown;
+			buttonEvents.emplace_back(button, isDown);
+			hasInput = true;
+		}
+	};
+	for (const View& view : _views) {
+		for (const ScalingSurface::PointerEvent& event : view.surface->TakePointerEvents()) {
+			using Type = ScalingSurface::PointerEvent::Type;
+			if ((event.type == Type::ButtonDown || event.type == Type::ButtonUp) && event.button < 2) {
+				addButtonEvent(event.button, event.type == Type::ButtonDown);
+			} else if (event.type == Type::Scroll) {
+				// The desktop reports 15 units per notch, positive downwards
+				_overlayWheel -= event.value / 15.0f;
+				hasInput = true;
+			} else if (event.type == Type::Leave) {
+				// A button that is held is released for the overlay
+				addButtonEvent(0, false);
+				addButtonEvent(1, false);
+			}
+		}
+	}
+	if (!_overlay) {
+		return true;
+	}
+
+	// Where the pointer is on the picture: where the cursor of the source is
+	// drawn, or where the pointer itself is if it is on a surface. Only
+	// there can it click on the overlay.
+	std::optional<Point> mousePos;
+	bool canClick = false;
+	const CaptureCursorState& cursor = _frameSource->CursorState();
+	if (cursor.isVisible) {
+		const Size rendererSize = _RendererSize();
+		const Point onRenderer = ScalingGeometry::SrcToScaling(cursor.pos, _frameSource->SrcRect(), destRect,
+			{ 0, 0, rendererSize.width, rendererSize.height }, false);
+		mousePos = Point{ onRenderer.x - destRect.left, onRenderer.y - destRect.top };
+	} else {
+		for (const View& view : _views) {
+			if (view.surface->IsPointerInside()) {
+				const Point onSurface = view.surface->PointerPos();
+				mousePos = Point{
+					view.rect.left - _rendererRect.left + onSurface.x - destRect.left,
+					view.rect.top - _rendererRect.top + onSurface.y - destRect.top
+				};
+				canClick = true;
+			}
+		}
+	}
+
+	const uint32_t fps = _stepTimer.GetFPS();
+	needsRedraw = needsRedraw || hasInput || mousePos != _overlayMousePos || _overlay->NeedRedraw(fps, mousePos);
+	_overlayMousePos = mousePos;
+
+	SmallVector<float> timings;
+	if (_chain->Profiler().IsProfiling()) {
+		timings = _chain->Profiler().GetTimings();
+	}
+
+	OverlayDrawer::Requests requests;
+	_overlay->Update({
+		.displaySize = { destRect.Width(), destRect.Height() },
+		.mousePos = mousePos,
+		.canClick = canClick,
+		.buttonEvents = buttonEvents,
+		.wheel = std::exchange(_overlayWheel, 0.0f),
+		.fps = fps,
+		.effectTimings = timings,
+		.dynamicDetectionStatistics = _frameSource->GetStatisticsForDynamicDetection()
+	}, requests);
+
+	// The effects are timed while the profiler shows the timings
+	if (_overlay->IsProfilerVisible() != _chain->Profiler().IsProfiling()) {
+		if (_overlay->IsProfilerVisible()) {
+			_chain->Profiler().Start(_device, _chain->PassCount());
+		} else {
+			_chain->Profiler().Stop();
+		}
+		needsRedraw = true;
+	}
+
+	// The arrow of the desktop while the pointer is to stay on a surface
+	const bool showArrow = _overlay->WantsMouse() || _isCaptureBlocked;
+	for (const View& view : _views) {
+		view.surface->SetCursorShown(showArrow);
+	}
+
+	if (requests.takeScreenshot) {
+		TakeScreenshot(requests.screenshotEffect);
+	}
+	if (requests.minimizeSource) {
+		// Scaling ends with it, and goes on when the source is shown again
+		_bridge->SetWindowProperties(_windowId, { .minimized = true });
+	}
+	if (requests.stopScaling) {
+		_endReason = EndReason::UserStopped;
+		return false;
+	}
+	if (requests.switchMode) {
+		_endReason = EndReason::ModeSwitchRequested;
+		return false;
+	}
+	return true;
+}
+
+void ScalingSession::SwitchToolbarState() noexcept {
+	if (!_isRunning) {
+		return;
+	}
+	if (!_overlay) {
+		Logger::Get().Warn("The toolbar is not supported in 3D game mode.");
+		return;
+	}
+
+	const ToolbarState newState = (ToolbarState)(((uint32_t)_overlay->GetToolbarState() + 1) % (uint32_t)ToolbarState::COUNT);
+	_overlay->SetToolbarState(newState);
+	static constexpr const char* NAMES[]{ "Off", "Always show", "Auto-hide" };
+	Logger::Get().Info(std::string("Toolbar: ") + NAMES[(size_t)newState]);
+	_isOverlayRedrawForced = true;
 }
 
 // Port of what SrcTracker::UpdateState and ScalingWindow::_UpdateSrcState
@@ -917,7 +1080,23 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 	const Rect rendererArea{ 0, 0, rendererSize.width, rendererSize.height };
 	const Point origin{ _virtualOutputRect.left, _virtualOutputRect.top };
 
+	// The pointer is over the toolbar or the profiler, or holds one of their
+	// controls. Clicks have to reach them and not the source, so the pointer
+	// goes to the surface with the picture and stays there, as CursorManager
+	// does when the cursor is on the overlay.
+	const bool overlayWantsPointer = _overlay && _overlay->WantsMouse();
+
 	if (cursor.isVisible) {
+		if (overlayWantsPointer) {
+			const auto now = steady_clock::now();
+			if (now - _lastOverlayReleaseTime >= 50ms) {
+				_lastOverlayReleaseTime = now;
+				_ReleasePointerToPicture(destRect);
+				++_statistics.pointerReleases;
+			}
+			return;
+		}
+
 		// Captured. Inside the source nothing is to be done.
 		_SetPointerSlowed(true, destRect);
 		if (Contains(_pointerRect, cursor.pos)) {
@@ -971,6 +1150,10 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 	}
 
 	_handledRingPos = { -1, -1 };
+
+	if (overlayWantsPointer) {
+		return;
+	}
 
 	// Released, or the source hides the cursor. If the pointer is on the
 	// scaled picture, it goes to the point of the source that it shows there,
@@ -1083,6 +1266,11 @@ bool ScalingSession::_Render(bool runEffects) noexcept {
 				destRect.right + offset.x, destRect.bottom + offset.y
 			};
 			Swapchain::Compose(cmd, *_chain->Output(), frame.image, viewSize, destRect);
+
+			// Overlay and cursor are drawn onto the frame, in this order
+			if (_overlay) {
+				_overlay->Draw(cmd, frame.image, frame.view, viewSize, { destRect.left, destRect.top });
+			}
 
 			if (cursor.isVisible) {
 				const Rect& srcRect = _frameSource->SrcRect();
@@ -1228,6 +1416,7 @@ void ScalingSession::Stop() noexcept {
 	}
 
 	// In this order: everything that draws, the surfaces, the capture
+	_overlay.reset();
 	_cursorDrawer.reset();
 	_chain.reset();
 	_chainInput.reset();

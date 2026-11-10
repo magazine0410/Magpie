@@ -37,7 +37,7 @@ static void PrintUsage() {
 		"Usage: magpie-engine [options]\n"
 		"\n"
 		"Runs until it is ended with Ctrl+C or SIGTERM. The shortcuts for scaling,\n"
-		"windowed scaling and screenshots are registered with the desktop, which asks\n"
+		"windowed scaling, the toolbar and screenshots are registered with the desktop, which asks\n"
 		"for confirmation the first time and lists them in its shortcut settings.\n"
 		"magpie-ctl sends the same commands.\n"
 		"\n"
@@ -77,7 +77,8 @@ enum class Command {
 	ToggleWindowed,
 	ScaleWindow,
 	Stop,
-	Screenshot
+	Screenshot,
+	Toolbar
 };
 
 struct Engine {
@@ -98,6 +99,8 @@ struct Engine {
 	// The width the user gave the window of windowed scaling; the next one
 	// starts with it, as on Windows while the program runs
 	int32_t lastWindowedWidth = 0;
+	// The keys the desktop bound to the actions, for the tool tips of the toolbar
+	std::string scaleShortcut, windowedScaleShortcut, screenshotShortcut;
 	// What the properties on D-Bus last said
 	bool announcedSourceActive = false;
 	Rect announcedSourceRect{};
@@ -180,7 +183,30 @@ struct Engine {
 		if (!allowCursorSpeed) {
 			options.IsAdjustCursorSpeed(false);
 		}
+		options.overlayOptions.scaleShortcut = scaleShortcut;
+		options.overlayOptions.windowedModeScaleShortcut = windowedScaleShortcut;
+		options.overlayOptions.takeScreenshotShortcut = screenshotShortcut;
 		return true;
+	}
+
+	// Keeps the places that the user gave the windows of the overlay, as
+	// the Windows version does when scaling ends. Nothing is written with a
+	// configuration file from the command line, and none is created: that
+	// is for the settings application to do.
+	void SaveOverlayOptions(const OverlayOptions& overlayOptions) {
+		if (configFile) {
+			return;
+		}
+
+		Settings settings;
+		if (SettingsStore::Load(settings) != SettingsStore::LoadResult::Loaded ||
+			settings.overlayWindowOptions == overlayOptions.windows) {
+			return;
+		}
+		settings.overlayWindowOptions = overlayOptions.windows;
+		if (!SettingsStore::Save(settings)) {
+			Logger::Get().Warn("The places of the overlay windows could not be saved");
+		}
 	}
 
 	void EndSession() {
@@ -191,6 +217,7 @@ struct Engine {
 		if (session->IsWindowedMode() && session->WindowedWidth() > 0) {
 			lastWindowedWidth = session->WindowedWidth();
 		}
+		SaveOverlayOptions(session->GetOverlayOptions());
 		session.reset();
 	}
 
@@ -211,6 +238,7 @@ struct Engine {
 			.stateFile = Paths::StateDir() / "scaling-state",
 			.validation = validation,
 			.appId = MAGPIE_APP_ID,
+			.iconFontPath = MAGPIE_DEFAULT_ICON_FONT,
 			.lastWindowedWidth = lastWindowedWidth
 		});
 		if (error != ScalingError::NoError) {
@@ -241,6 +269,11 @@ struct Engine {
 	void OnSessionEnded() {
 		const ScalingSession::EndReason reason = session->GetEndReason();
 		Logger::Get().Info("The scaling session ended (reason " + std::to_string((int)reason) + ")");
+		if (reason == ScalingSession::EndReason::ModeSwitchRequested) {
+			// The button of the toolbar: the same window the other way
+			StartScaling(std::string(windowId), !isWindowedMode);
+			return;
+		}
 		EndSession();
 
 		if (reason == ScalingSession::EndReason::SourceResized ||
@@ -283,6 +316,10 @@ struct Engine {
 		} else if (current == Command::Screenshot) {
 			if (!session || !session->TakeScreenshot()) {
 				Logger::Get().Warn("No screenshot: no window is scaled");
+			}
+		} else if (current == Command::Toolbar) {
+			if (session) {
+				session->SwitchToolbarState();
 			}
 		} else if (current == Command::Toggle || current == Command::ToggleWindowed) {
 			const bool windowed = current == Command::ToggleWindowed;
@@ -346,6 +383,11 @@ int OnScaleWindow(sd_bus_message* message, void* userData, sd_bus_error*) {
 	return sd_bus_reply_method_return(message, "");
 }
 
+int OnSwitchToolbar(sd_bus_message* message, void* userData, sd_bus_error*) {
+	((Engine*)userData)->command = Command::Toolbar;
+	return sd_bus_reply_method_return(message, "");
+}
+
 int OnTakeScreenshot(sd_bus_message* message, void* userData, sd_bus_error*) {
 	((Engine*)userData)->command = Command::Screenshot;
 	return sd_bus_reply_method_return(message, "");
@@ -397,6 +439,8 @@ const sd_bus_vtable VTABLE[]{
 	SD_BUS_METHOD("Scale", "", "", OnScale, SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("ScaleWindowed", "", "", OnScaleWindowed, SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("TakeScreenshot", "", "", OnTakeScreenshot, SD_BUS_VTABLE_UNPRIVILEGED),
+	// The toolbar: off, always shown, shown when the pointer is near
+	SD_BUS_METHOD("SwitchToolbar", "", "", OnSwitchToolbar, SD_BUS_VTABLE_UNPRIVILEGED),
 	// A window id, an app ID or a part of a title; and whether into a window
 	SD_BUS_METHOD("ScaleWindow", "sb", "", OnScaleWindow, SD_BUS_VTABLE_UNPRIVILEGED),
 	SD_BUS_METHOD("Stop", "", "", OnStop, SD_BUS_VTABLE_UNPRIVILEGED),
@@ -497,6 +541,11 @@ int main(int argc, char* argv[]) {
 				ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::WindowedModeScale])
 			},
 			{
+				"toolbar",
+				"Show or hide the toolbar on the scaled picture",
+				ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::Toolbar])
+			},
+			{
 				"screenshot",
 				"Save a screenshot of the scaled picture",
 				ShortcutToPortalTrigger(settings.shortcuts[(size_t)ShortcutAction::TakeScreenshot])
@@ -505,6 +554,13 @@ int main(int argc, char* argv[]) {
 		if (shortcuts.Initialize(engine.bus, MAGPIE_APP_ID, wanted)) {
 			for (const auto& [id, trigger] : shortcuts.Bound()) {
 				std::printf("Shortcut \"%s\": %s\n", id.c_str(), trigger.empty() ? "no key assigned" : trigger.c_str());
+				if (id == "scale") {
+					engine.scaleShortcut = trigger;
+				} else if (id == "scale-windowed") {
+					engine.windowedScaleShortcut = trigger;
+				} else if (id == "screenshot") {
+					engine.screenshotShortcut = trigger;
+				}
 			}
 		} else {
 			std::fprintf(stderr, "No global shortcut is registered; magpie-ctl still works.\n");
@@ -545,6 +601,8 @@ int main(int argc, char* argv[]) {
 				engine.command = Command::ToggleWindowed;
 			} else if (id == "screenshot") {
 				engine.command = Command::Screenshot;
+			} else if (id == "toolbar") {
+				engine.command = Command::Toolbar;
 			}
 		}
 

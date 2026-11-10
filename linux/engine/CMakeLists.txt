@@ -5,6 +5,8 @@ find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+# The arrow of the desktop's cursor theme, for the pointer on the toolbar
+pkg_check_modules(WAYLAND_CURSOR REQUIRED IMPORTED_TARGET wayland-cursor)
 pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
 # The layer shell, for a surface above all windows that takes no focus
 pkg_get_variable(WLR_PROTOCOLS_DIR wlr-protocols pkgdatadir)
@@ -42,7 +44,7 @@ target_include_directories(magpie_engine
 )
 target_link_libraries(magpie_engine
 	PUBLIC magpie_render magpie_bridge
-	PRIVATE PkgConfig::PIPEWIRE PkgConfig::WAYLAND_CLIENT magpie_warnings
+	PRIVATE PkgConfig::PIPEWIRE PkgConfig::WAYLAND_CLIENT PkgConfig::WAYLAND_CURSOR magpie_warnings
 )
 target_compile_definitions(magpie_engine PRIVATE VK_USE_PLATFORM_WAYLAND_KHR)
 # See render/CMakeLists.txt

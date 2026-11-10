@@ -52,6 +52,9 @@ static void PrintUsage() {
 		"                     intersected: all monitors the window touches; all\n"
 		"  --3d               3D game mode: the pointer stays with the source\n"
 		"  --no-topmost       do not keep the picture above everything else\n"
+		"  --toolbar STATE    off, show or auto (default): the toolbar at the top of\n"
+		"                     the picture is shown when the pointer is near\n"
+		"  --developer        developer mode: more in the profiler\n"
 		"\n"
 		"Effects:\n"
 		"  --effect SPEC      add an effect; may be given several times. Without\n"
@@ -102,6 +105,8 @@ static const char* Describe(ScalingSession::EndReason reason) {
 	case SourceMoved: return "the source window was moved";
 	case FocusLost: return "another window on the same monitor became active";
 	case WindowClosed: return "the window with the picture was closed";
+	case UserStopped: return "the stop button of the toolbar was pressed";
+	case ModeSwitchRequested: return "the toolbar asked for the other way of scaling, which this tool does not do";
 	case CaptureFailed: return "capturing failed";
 	case Failed: return "of an error";
 	default: return "it was asked to";
@@ -140,6 +145,7 @@ int main(int argc, char* argv[]) {
 	// Unlike in a profile, where it is on by default
 	options.IsAdjustCursorSpeed(false);
 	config.appId = MAGPIE_APP_ID;
+	config.iconFontPath = MAGPIE_DEFAULT_ICON_FONT;
 
 	const char* configFile = nullptr;
 	const char* modeName = nullptr;
@@ -204,6 +210,21 @@ int main(int argc, char* argv[]) {
 			options.Is3DGameMode(true);
 		} else if (arg == "--no-topmost") {
 			options.IsTopmostDisabled(true);
+		} else if (arg == "--toolbar") {
+			const std::string_view state = value();
+			ToolbarState toolbarState;
+			if (state == "off") {
+				toolbarState = ToolbarState::Off;
+			} else if (state == "show") {
+				toolbarState = ToolbarState::AlwaysShow;
+			} else if (state == "auto") {
+				toolbarState = ToolbarState::AutoHide;
+			} else {
+				invalid(state.data());
+			}
+			options.fullscreenInitialToolbarState = options.windowedInitialToolbarState = toolbarState;
+		} else if (arg == "--developer") {
+			options.IsDeveloperMode(true);
 		} else if (arg == "--title-bar") {
 			options.IsCaptureTitleBar(true);
 		} else if (arg == "--allow-maximized") {

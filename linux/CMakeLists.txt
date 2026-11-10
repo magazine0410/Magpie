@@ -34,6 +34,7 @@ find_package(RapidJSON REQUIRED)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Dxc)
+include(ImGui)
 
 add_subdirectory(core)
 add_subdirectory(fx)

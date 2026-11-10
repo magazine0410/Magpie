@@ -20,6 +20,8 @@ static void PrintUsage() {
 		"  window [QUERY]   the same into a window that can be moved and resized\n"
 		"  stop             stop scaling\n"
 		"  screenshot       save the scaled picture to the screenshots directory\n"
+		"  toolbar          the toolbar on the scaled picture: off, always shown,\n"
+		"                   shown when the pointer is near\n"
 		"  status           print \"idle\", \"scaling\" or \"waiting\"\n"
 		"\n"
 		"Exit status: 0 on success, 1 if magpie-engine is not running or refused.");
@@ -52,6 +54,9 @@ int main(int argc, char* argv[]) {
 	} else if (command == "scale" || command == "window") {
 		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "ScaleWindow",
 			&error, nullptr, "sb", argv[2], (int)(command == "window"));
+	} else if (command == "toolbar" && argc == 2) {
+		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "SwitchToolbar",
+			&error, nullptr, "");
 	} else if (command == "screenshot" && argc == 2) {
 		result = sd_bus_call_method(bus, MAGPIE_APP_ID, MAGPIE_OBJECT_PATH, MAGPIE_APP_ID, "TakeScreenshot",
 			&error, nullptr, "");
