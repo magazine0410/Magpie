@@ -456,6 +456,22 @@ void PipeWireFrameSource::_ReadCursor(pw_buffer* buffer) noexcept {
 	}
 	// Otherwise the image is empty, which means an invisible cursor
 
+	// PipeWire does not say whether the colours are multiplied by alpha. KWin
+	// and Mutter send them multiplied, and the cursor is drawn on that
+	// assumption. A colour above its alpha contradicts it.
+	bool isPremultiplied = true;
+	for (size_t i = 0; i < image.pixels.size() && isPremultiplied; i += 4) {
+		const uint8_t alpha = image.pixels[i + 3];
+		isPremultiplied = image.pixels[i] <= alpha && image.pixels[i + 1] <= alpha && image.pixels[i + 2] <= alpha;
+	}
+	if (isPremultiplied) {
+		Logger::Get().Info(fmt::format("Cursor image {}x{} with the hot spot at {},{}",
+			image.size.width, image.size.height, image.hotSpot.x, image.hotSpot.y));
+	} else {
+		Logger::Get().Warn(fmt::format("The cursor image ({}x{}) has colours that are not multiplied by alpha; "
+			"its edges will look too bright", image.size.width, image.size.height));
+	}
+
 	_cursorImage = std::move(image);
 	++_cursorState.imageSerial;
 }

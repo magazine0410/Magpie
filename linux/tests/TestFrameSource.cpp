@@ -162,9 +162,14 @@ TEST_CASE("The cursor is read from the stream", "[capture]") {
 			.x = 40, .y = 30, .hotSpotX = 3, .hotSpotY = 5,
 			.bitmapWidth = 7, .bitmapHeight = 9
 		};
+		// Colours multiplied by alpha are never above it
 		cursor.bitmap.resize(7 * 9 * 4);
-		for (size_t i = 0; i < cursor.bitmap.size(); ++i) {
-			cursor.bitmap[i] = uint8_t(i * 3 + 1);
+		for (size_t i = 0; i < cursor.bitmap.size(); i += 4) {
+			const uint8_t alpha = uint8_t(i * 3 + 40);
+			cursor.bitmap[i] = uint8_t(alpha / 2);
+			cursor.bitmap[i + 1] = uint8_t(alpha / 3);
+			cursor.bitmap[i + 2] = alpha;
+			cursor.bitmap[i + 3] = alpha;
 		}
 		capture.Send({ .pixels = MakePicture(WIDTH, HEIGHT, 1), .cursor = cursor });
 

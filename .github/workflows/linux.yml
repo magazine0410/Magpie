@@ -35,6 +35,7 @@ jobs:
           fmt-devel spdlog-devel rapidjson-devel catch-devel
           vulkan-headers vulkan-loader-devel muParser-devel libpng-devel
           wayland-devel wayland-protocols-devel
+          pipewire-devel systemd-devel plasma-wayland-protocols-devel
           mesa-vulkan-drivers vulkan-validation-layers
 
       - uses: actions/checkout@v4
@@ -47,7 +48,9 @@ jobs:
         run: cmake --build build
 
       # The renderer tests (label "gpu") run on llvmpipe, the software Vulkan
-      # implementation of mesa-vulkan-drivers.
+      # implementation of mesa-vulkan-drivers. The capture tests among them
+      # need a PipeWire session, which the container does not have, and skip
+      # themselves.
       # The test labelled "slow" compiles every effect in six combinations.
       # The compiler is the same binary in both build types, so once is enough.
       - name: Test
