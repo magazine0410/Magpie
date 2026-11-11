@@ -26,7 +26,7 @@ Works on every Wayland desktop. Needs the package `sway`.
 The Launch button of a profile with "Launch in a nested session", or `magpie-ctl launch -- PROGRAM`, starts a Sway that shows nothing, starts the program in it, and shows that Sway's screen scaled: covering a monitor, or in a window. The window with the picture has the keyboard and the pointer and passes both on.
 
 - **The program sees** a screen of the size set in the profile (1280x720 unless changed). A window that cannot be resized is scaled at its own size.
-- **X11 programs** run through that Sway's Xwayland. That is also how Wine shows its windows, but a Windows program has not been tried in a nested session yet.
+- **X11 programs** run through that Sway's Xwayland. That is also how Wine shows its windows: a Windows game started by the script of its launcher ran fullscreen in a nested session, with pointer and clicks, and the session ended when the game was left.
 - **A program that hides the cursor** (most 3D games) gets the mouse's raw movement, as it would on a real screen.
 - The scale shortcuts switch between fullscreen and windowed. Stopping ends the program: it has no desktop to return to.
 - The clipboard is not shared with the desktop.
