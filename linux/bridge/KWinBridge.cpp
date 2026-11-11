@@ -589,6 +589,8 @@ std::unique_ptr<CaptureSession> KWinBridge::CaptureWindow(const std::string& win
 	return session;
 }
 
+static bool RunProgram(const std::vector<std::string>& arguments, std::string* output = nullptr) noexcept;
+
 std::unique_ptr<CaptureSession> KWinBridge::CreateVirtualOutput(
 	const std::string& name,
 	Size size,
@@ -597,6 +599,14 @@ std::unique_ptr<CaptureSession> KWinBridge::CreateVirtualOutput(
 	if (!_connection || _connection->screencastVersion < MIN_SCREENCAST_VERSION_FOR_VIRTUAL) {
 		Logger::Get().Error("KWin's screen cast interface does not offer virtual outputs");
 		return nullptr;
+	}
+
+	// How the monitors are arranged now; see KWinOutputSetup and
+	// ConfigureOutput
+	{
+		std::string json;
+		RunProgram({ "kscreen-doctor", "-j" }, &json);
+		_outputsBeforeVirtual = KWinOutputSetup::Parse(json);
 	}
 
 	auto session = std::make_unique<Session>(_connection, zkde_screencast_unstable_v1_stream_virtual_output(
@@ -625,7 +635,7 @@ std::unique_ptr<CaptureSession> KWinBridge::CreateVirtualOutput(
 
 // Runs a program and waits for it. Its standard output goes to `output`, or
 // is discarded without one.
-static bool RunProgram(const std::vector<std::string>& arguments, std::string* output = nullptr) noexcept {
+static bool RunProgram(const std::vector<std::string>& arguments, std::string* output) noexcept {
 	std::vector<char*> argv;
 	for (const std::string& argument : arguments) {
 		argv.push_back(const_cast<char*>(argument.c_str()));
@@ -734,6 +744,106 @@ std::vector<KWinOutputModes::Mode> KWinOutputModes::Parse(
 	return result;
 }
 
+std::vector<KWinOutputSetup::Output> KWinOutputSetup::Parse(const std::string& json) noexcept {
+	std::vector<Output> result;
+
+	rapidjson::Document document;
+	document.Parse(json.c_str(), json.size());
+	if (document.HasParseError() || !document.IsObject()) {
+		return result;
+	}
+	const auto outputs = document.FindMember("outputs");
+	if (outputs == document.MemberEnd() || !outputs->value.IsArray()) {
+		return result;
+	}
+
+	for (const auto& output : outputs->value.GetArray()) {
+		if (!output.IsObject()) {
+			continue;
+		}
+		const auto name = output.FindMember("name");
+		const auto enabled = output.FindMember("enabled");
+		if (name == output.MemberEnd() || !name->value.IsString() ||
+			enabled == output.MemberEnd() || !enabled->value.IsBool()) {
+			continue;
+		}
+
+		Output entry{ .name = name->value.GetString(), .isEnabled = enabled->value.GetBool() };
+		if (const auto pos = output.FindMember("pos"); pos != output.MemberEnd() && pos->value.IsObject()) {
+			const auto x = pos->value.FindMember("x");
+			const auto y = pos->value.FindMember("y");
+			if (x != pos->value.MemberEnd() && x->value.IsInt() && y != pos->value.MemberEnd() && y->value.IsInt()) {
+				entry.position = { x->value.GetInt(), y->value.GetInt() };
+			}
+		}
+		entry.modes = KWinOutputModes::Parse(json, entry.name);
+		if (const auto mode = output.FindMember("currentModeId"); mode != output.MemberEnd() && mode->value.IsString()) {
+			for (const KWinOutputModes::Mode& candidate : entry.modes) {
+				if (candidate.id == mode->value.GetString()) {
+					entry.modeSize = candidate.size;
+					entry.refreshRate = candidate.refreshRate;
+				}
+			}
+		}
+		if (const auto scale = output.FindMember("scale"); scale != output.MemberEnd() && scale->value.IsNumber()) {
+			entry.scale = scale->value.GetDouble();
+		}
+		if (const auto priority = output.FindMember("priority"); priority != output.MemberEnd() && priority->value.IsInt()) {
+			entry.priority = priority->value.GetInt();
+		}
+		result.push_back(std::move(entry));
+	}
+	return result;
+}
+
+std::vector<std::string> KWinOutputSetup::RestoreArguments(
+	const std::vector<Output>& before,
+	const std::vector<Output>& now,
+	const std::string& except
+) noexcept {
+	std::vector<std::string> arguments;
+	for (const Output& was : before) {
+		const auto is = std::find_if(now.begin(), now.end(), [&](const Output& output) { return output.name == was.name; });
+		if (is == now.end() || was.name == except) {
+			continue;
+		}
+		const std::string prefix = "output." + was.name;
+		if (!was.isEnabled) {
+			if (is->isEnabled) {
+				arguments.push_back(prefix + ".disable");
+			}
+			continue;
+		}
+
+		// An output that was switched off gets everything it had; what it
+		// reports while it is off need not be what it comes back with
+		const bool wasOff = !is->isEnabled;
+		if (wasOff) {
+			arguments.push_back(prefix + ".enable");
+		}
+		if (wasOff || is->position != was.position) {
+			arguments.push_back(fmt::format("{}.position.{},{}", prefix, was.position.x, was.position.y));
+		}
+		const bool hasMode = was.modeSize.width > 0;
+		if (hasMode && (wasOff || is->modeSize != was.modeSize || std::abs(is->refreshRate - was.refreshRate) > 0.01)) {
+			// By the number the mode has now
+			for (const KWinOutputModes::Mode& mode : is->modes) {
+				if (mode.size == was.modeSize && std::abs(mode.refreshRate - was.refreshRate) <= 0.01) {
+					arguments.push_back(fmt::format("{}.mode.{}", prefix, mode.id));
+					break;
+				}
+			}
+		}
+		if (wasOff || is->scale != was.scale) {
+			arguments.push_back(fmt::format("{}.scale.{}", prefix, was.scale));
+		}
+		if (was.priority > 0 && is->priority != was.priority) {
+			arguments.push_back(fmt::format("{}.priority.{}", prefix, was.priority));
+		}
+	}
+	return arguments;
+}
+
 const KWinOutputModes::Mode* KWinOutputModes::Choose(
 	const std::vector<Mode>& modes,
 	Size size,
@@ -767,8 +877,8 @@ bool KWinBridge::ConfigureOutput(
 	static constexpr const char* TOOL = "kscreen-doctor";
 	const std::string prefix = "output." + outputName;
 
+	std::string json;
 	const auto queryModes = [&]() {
-		std::string json;
 		RunProgram({ TOOL, "-j" }, &json);
 		return KWinOutputModes::Parse(json, outputName);
 	};
@@ -793,11 +903,25 @@ bool KWinBridge::ConfigureOutput(
 	// The mode by its id and not by a name with a rounded refresh rate, and
 	// together with the place, so that KWin does not fall back to the mode
 	// it remembers for the name in between
-	if (!RunProgram({
+	std::vector<std::string> arguments{
 		TOOL,
 		fmt::format("{}.mode.{}", prefix, mode->id),
 		fmt::format("{}.position.{},{}", prefix, position.x, position.y)
-	})) {
+	};
+	// With the virtual output KWin has brought back the arrangement it kept
+	// for this set of outputs. Where that differs from what the monitors had
+	// a moment ago, they get it back, and KWin keeps that from now on.
+	const std::vector<std::string> restore = KWinOutputSetup::RestoreArguments(
+		_outputsBeforeVirtual, KWinOutputSetup::Parse(json), outputName);
+	if (!restore.empty()) {
+		std::string text;
+		for (const std::string& argument : restore) {
+			text += " " + argument;
+		}
+		Logger::Get().Warn("KWin changed the monitors when the virtual output appeared; putting them back:" + text);
+		arguments.insert(arguments.end(), restore.begin(), restore.end());
+	}
+	if (!RunProgram(arguments)) {
 		Logger::Get().Error(fmt::format("Configuring the output {} with kscreen-doctor failed", outputName));
 		return false;
 	}

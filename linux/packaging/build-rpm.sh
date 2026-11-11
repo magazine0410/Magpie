@@ -23,6 +23,7 @@ SPEC=$REPO/linux/packaging/magpie-upscaler.spec
 # v0.13.0-42-g08cce49a: the last release, and the commit
 description=$(git -C "$REPO" describe --tags --long --abbrev=8)
 base=$(echo "$description" | sed -E 's/^v([0-9.]+).*/\1/')
+count=$(echo "$description" | sed -E 's/^v[0-9.]+-([0-9]+)-g.*/\1/')
 commit=$(git -C "$REPO" rev-parse --short=8 HEAD)
 date=$(git -C "$REPO" log -1 --format=%cd --date=format:%Y%m%d)
 
@@ -44,7 +45,8 @@ cp "$SPEC" "$TOPDIR/SPECS/"
 
 rpmbuild "$@" \
 	--define "_topdir $TOPDIR" \
-	--define "magpie_base $base" --define "magpie_date $date" --define "magpie_commit $commit" \
+	--define "magpie_base $base" --define "magpie_date $date" --define "magpie_count $count" \
+	--define "magpie_commit $commit" \
 	"$TOPDIR/SPECS/magpie-upscaler.spec"
 echo
 echo "packages:"

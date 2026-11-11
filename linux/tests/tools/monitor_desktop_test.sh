@@ -10,6 +10,13 @@
 # mode and scale before, sets them again when it enables the monitor, and
 # says if anything differs afterwards.
 #
+# KWin keeps an arrangement for every set of outputs, and the set while a
+# window is scaled includes Magpie's virtual output. Disabling the monitor
+# then makes KWin keep "disabled" for that set, and the monitor would go off
+# again whenever a window is scaled. The scaler puts the monitors back when
+# it finds them changed, so the script scales once more at its end, which
+# makes KWin keep the right arrangement, and checks that.
+#
 # kwin_virtual_test.sh checks the same in a KWin of its own, which shows
 # nothing; this script is for the real thing.
 #
@@ -119,6 +126,18 @@ outputs > "$OUT/outputs-after.txt"
 check "the monitors are as they were" "$(diff "$OUT/outputs-before.txt" "$OUT/outputs-after.txt" > /dev/null && echo yes || echo no)" "yes"
 diff "$OUT/outputs-before.txt" "$OUT/outputs-after.txt"
 echo "the test window afterwards: $(frame)"
+
+echo "--- scaled on $MONITOR again ---"
+"$SB/kwin_windows/kwin_windows" --send-to-output "$UUID" "$MONITOR" > /dev/null
+sleep 0.8
+for run in again third; do
+	"$B/tools/magpie-scale/magpie-scale" --window "$UUID" --seconds 3 --effect Lanczos,type=fit -v > "$OUT/scale-$run.log" 2>&1
+	check "scaling on $MONITOR works ($run)" "$? $(grep -c "on $MONITOR;" "$OUT/scale-$run.log" | sed 's/^[1-9][0-9]*$/yes/')" "0 yes"
+done
+check "the scaler put the monitor back once" "$(grep -c "KWin changed the monitors" "$OUT/scale-again.log")" "1"
+check "and found it in place the next time" "$(grep -c "output.$MONITOR.enable" "$OUT/scale-third.log")" "0"
+outputs > "$OUT/outputs-end.txt"
+check "the monitors are as they were at the end" "$(diff "$OUT/outputs-before.txt" "$OUT/outputs-end.txt" > /dev/null && echo yes || echo no)" "yes"
 
 kill "$SOURCE_PID" 2> /dev/null
 echo

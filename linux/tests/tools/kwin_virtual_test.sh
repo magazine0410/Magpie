@@ -119,6 +119,23 @@ if [ "${MAGPIE_KWIN_TEST_PART:-}" != "" ]; then
 		AFTER=$(frame source)
 		check "the window has its size and title bar" "${AFTER%%+*}" "640x508"
 		check "and is on the monitor that is left" "$([ "$(echo "$AFTER" | cut -d+ -f2)" -lt 1920 ] && echo yes)" "yes"
+
+		# KWin keeps an arrangement for every set of outputs, and has kept
+		# "disabled" for the set with the virtual output. Enabled again,
+		# the monitor is on, but the next virtual output would switch it off
+		# once more if the scaler did not put it back.
+		kscreen-doctor output.Virtual-1.enable output.Virtual-1.position.1920,0 > /dev/null 2>&1
+		sleep 1
+		kwin_script 'const w = workspace.windowList().find(w => w.caption == "source"); workspace.sendClientToScreen(w, workspace.screens.find(s => s.name == "Virtual-1"));'
+		check "enabled again, the monitor has the window" "$([ "$(frame source | cut -d+ -f2)" -ge 1920 ] && echo yes)" "yes"
+		scale "$T/monitor-again.log" --seconds 3
+		check "the window is scaled there again" "$? $(described "$T/monitor-again.log")" \
+			"0 Scaling 640x480 on Virtual-Magpie to 1440x1080 on Virtual-1"
+		check "after the scaler put the monitor back" "$(grep -c "KWin changed the monitors when the virtual output appeared" "$T/monitor-again.log")" "1"
+		scale "$T/monitor-third.log" --seconds 3
+		check "and the time after that KWin leaves it alone" \
+			"$? $(grep -c "KWin changed the monitors" "$T/monitor-third.log") $(described "$T/monitor-third.log")" \
+			"0 0 Scaling 640x480 on Virtual-Magpie to 1440x1080 on Virtual-1"
 	fi
 
 	if [ "$PART" = kill ]; then

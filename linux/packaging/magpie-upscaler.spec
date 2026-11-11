@@ -1,7 +1,10 @@
 # Magpie for Linux. Built from a git archive by build-rpm.sh, which also
-# gives the three macros below; a build without them takes these defaults.
+# gives the four macros below; a build without them takes these defaults.
+# The count is the number of commits since the release named by the base,
+# which puts two packages of the same day in order.
 %{!?magpie_base:%global magpie_base 0.13.0}
 %{!?magpie_date:%global magpie_date 20261111}
+%{!?magpie_count:%global magpie_count 0}
 %{!?magpie_commit:%global magpie_commit 0000000}
 
 %global app_id io.github.magazine0410.Magpie
@@ -20,7 +23,7 @@
 %global __requires_exclude ^libdxcompiler\\.so.*$
 
 Name:           magpie-upscaler
-Version:        %{magpie_base}^%{magpie_date}git%{magpie_commit}
+Version:        %{magpie_base}^%{magpie_date}.%{magpie_count}.git%{magpie_commit}
 Release:        1%{?dist}
 Summary:        Scale windows with a choice of scaling algorithms
 

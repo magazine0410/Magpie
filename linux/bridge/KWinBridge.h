@@ -40,6 +40,42 @@ struct KWinOutputModes {
 	static bool IsCloseEnough(const Mode& mode, int32_t refreshRate) noexcept;
 };
 
+// The arrangement of the outputs as the program kscreen-doctor reports it.
+// KWin keeps one arrangement for every set of outputs, and a virtual output
+// makes it another set: the arrangement KWin kept for that set comes back
+// when the virtual output appears, with whatever was true when it was last
+// in use: a monitor that was disabled then, or one that stood elsewhere.
+// With this the monitors are given what they had a moment before.
+struct KWinOutputSetup {
+	struct Output {
+		std::string name;
+		bool isEnabled = false;
+		Point position;
+		// The mode it has: its size and its refresh rate in hertz; zero if
+		// not known. KWin numbers the modes anew when the set of outputs
+		// changes, so a mode is known by these and not by its number.
+		Size modeSize;
+		double refreshRate = 0.0;
+		// The modes it can have, with the numbers kscreen-doctor takes
+		std::vector<KWinOutputModes::Mode> modes;
+		double scale = 1.0;
+		int priority = 0;
+	};
+
+	// The outputs in what "kscreen-doctor -j" prints; empty if the text is
+	// something else
+	static std::vector<Output> Parse(const std::string& json) noexcept;
+
+	// The arguments for kscreen-doctor that give the outputs of `before`
+	// back what they had, as far as `now` differs. An output that is in only
+	// one of the two is left alone, and so is `except`.
+	static std::vector<std::string> RestoreArguments(
+		const std::vector<Output>& before,
+		const std::vector<Output>& now,
+		const std::string& except
+	) noexcept;
+};
+
 class KWinBridge final : public DesktopBridge {
 public:
 	KWinBridge() noexcept;
@@ -109,6 +145,8 @@ private:
 
 	// Shared with the capture sessions, which may outlive this object
 	std::shared_ptr<Connection> _connection;
+	// The arrangement before the last virtual output was made
+	std::vector<KWinOutputSetup::Output> _outputsBeforeVirtual;
 };
 
 }
