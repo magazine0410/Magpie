@@ -109,7 +109,19 @@ private:
 
 	bool _PrepareOutput() noexcept;
 
-	bool _CopyFrame(pw_buffer* buffer) noexcept;
+	enum class CopyResult {
+		Copied,
+		// The frame could not be used, and the stream was asked for frames
+		// of another kind
+		Skipped,
+		Failed
+	};
+
+	CopyResult _CopyFrame(pw_buffer* buffer) noexcept;
+
+	// The formats the stream may have, as offers in `storage`: DMA-BUF first
+	// if wanted and possible, then shared memory. Empty on failure.
+	std::vector<const spa_pod*> _BuildOffers(bool withDmabuf, std::vector<uint8_t>& storage) const noexcept;
 
 	VulkanDevice* _device = nullptr;
 	Options _options;
@@ -131,6 +143,10 @@ private:
 	// empty damage list may only mean that the producer does not fill it in.
 	bool _hasSeenDamage = false;
 	bool _failed = false;
+	// A DMA-BUF of the stream could not be imported, and the stream was
+	// asked for shared memory instead
+	bool _isDmabufGivenUp = false;
+	uint32_t _dmabufFramesAfterGivingUp = 0;
 
 	// One texture per DMA-BUF of the stream. PipeWire reuses a small set of
 	// buffers, so each is imported once.

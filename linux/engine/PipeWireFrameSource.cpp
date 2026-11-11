@@ -345,27 +345,9 @@ bool PipeWireFrameSource::Initialize(VulkanDevice& device, const Options& option
 	_listeners->streamEvents.process = Listeners::OnProcess;
 	pw_stream_add_listener(_stream, &_listeners->stream, &_listeners->streamEvents, this);
 
-	// The offers, DMA-BUF first. The modifier list is that of the graphics
-	// card that renders: a compositor on another card finds no common
-	// modifier and falls back to the offers for shared memory.
-	std::vector<uint8_t> storage(64 * 1024);
-	spa_pod_builder builder;
-	spa_pod_builder_init(&builder, storage.data(), (uint32_t)storage.size());
-	std::vector<const spa_pod*> offers;
-
-	if (options.isDmabufAllowed && device.IsDmabufImportSupported()) {
-		for (spa_video_format format : STREAM_FORMATS) {
-			const std::vector<uint64_t> modifiers = device.DmabufModifiers(ToVkFormat(format));
-			if (!modifiers.empty()) {
-				offers.push_back(BuildFormatOffer(&builder, format, modifiers, options.fixedSize));
-			}
-		}
-	}
-	for (spa_video_format format : STREAM_FORMATS) {
-		offers.push_back(BuildFormatOffer(&builder, format, {}, options.fixedSize));
-	}
-	if (std::find(offers.begin(), offers.end(), nullptr) != offers.end()) {
-		Logger::Get().Error("The format offers do not fit their buffer");
+	std::vector<uint8_t> storage;
+	std::vector<const spa_pod*> offers = _BuildOffers(options.isDmabufAllowed, storage);
+	if (offers.empty()) {
 		return false;
 	}
 
@@ -381,6 +363,36 @@ bool PipeWireFrameSource::Initialize(VulkanDevice& device, const Options& option
 	pw_loop_enter(_loop);
 	_isLoopEntered = true;
 	return true;
+}
+
+// The offers, DMA-BUF first. The modifier list is that of the graphics card
+// that renders: a compositor on another card finds no common modifier and
+// falls back to the offers for shared memory.
+std::vector<const spa_pod*> PipeWireFrameSource::_BuildOffers(
+	bool withDmabuf,
+	std::vector<uint8_t>& storage
+) const noexcept {
+	storage.resize(64 * 1024);
+	spa_pod_builder builder;
+	spa_pod_builder_init(&builder, storage.data(), (uint32_t)storage.size());
+	std::vector<const spa_pod*> offers;
+
+	if (withDmabuf && _device->IsDmabufImportSupported()) {
+		for (spa_video_format format : STREAM_FORMATS) {
+			const std::vector<uint64_t> modifiers = _device->DmabufModifiers(ToVkFormat(format));
+			if (!modifiers.empty()) {
+				offers.push_back(BuildFormatOffer(&builder, format, modifiers, _options.fixedSize));
+			}
+		}
+	}
+	for (spa_video_format format : STREAM_FORMATS) {
+		offers.push_back(BuildFormatOffer(&builder, format, {}, _options.fixedSize));
+	}
+	if (std::find(offers.begin(), offers.end(), nullptr) != offers.end()) {
+		Logger::Get().Error("The format offers do not fit their buffer");
+		return {};
+	}
+	return offers;
 }
 
 int PipeWireFrameSource::EventFd() const noexcept {
@@ -492,12 +504,15 @@ FrameSourceState PipeWireFrameSource::Update() noexcept {
 	pw_buffer* buffer = _pendingBuffer;
 	_pendingBuffer = nullptr;
 
-	const bool copied = _PrepareOutput() && _CopyFrame(buffer);
+	const CopyResult copied = _CopyFrame(buffer);
 	// The producer may write to the buffer again
 	pw_stream_queue_buffer(_stream, buffer);
-	if (!copied) {
+	if (copied == CopyResult::Failed) {
 		_failed = true;
 		return FrameSourceState::Error;
+	}
+	if (copied == CopyResult::Skipped) {
+		return FrameSourceState::Waiting;
 	}
 
 	_outputArrivalTime = _pendingArrivalTime;
@@ -548,49 +563,76 @@ bool PipeWireFrameSource::_PrepareOutput() noexcept {
 	return true;
 }
 
-bool PipeWireFrameSource::_CopyFrame(pw_buffer* buffer) noexcept {
+PipeWireFrameSource::CopyResult PipeWireFrameSource::_CopyFrame(pw_buffer* buffer) noexcept {
 	static constexpr VkImageSubresourceLayers COLOR_LAYER{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 
 	const spa_data& data = buffer->buffer->datas[0];
 	const uint32_t streamWidth = _format->info.size.width;
 	const uint32_t streamHeight = _format->info.size.height;
 	const uint32_t stride = data.chunk->stride > 0 ? (uint32_t)data.chunk->stride : streamWidth * 4;
-	const VkExtent3D extent{ _output->width, _output->height, 1 };
 
 	// Set when a DMA-BUF frame is copied, otherwise the frame is in _stagingBuffer
 	Texture* imported = nullptr;
 
 	if (data.type == SPA_DATA_DmaBuf) {
+		if (_isDmabufGivenUp) {
+			// On its way since before the stream was asked for shared memory.
+			// A stream that does not change is of no use.
+			if (++_dmabufFramesAfterGivingUp > 300) {
+				Logger::Get().Error("The capture stream goes on sending frames that cannot be imported");
+				return CopyResult::Failed;
+			}
+			return CopyResult::Skipped;
+		}
+
 		std::shared_ptr<Texture>& texture = _importedBuffers[buffer];
 		if (!texture) {
 			texture = _device->ImportDmabuf((int)data.fd, _format->vkFormat, streamWidth, streamHeight,
 				_format->info.modifier, data.chunk->offset, stride);
 			if (!texture) {
 				_importedBuffers.erase(buffer);
-				Logger::Get().Error("A frame of the capture stream could not be imported. "
-					"Capturing without DMA-BUF avoids the import.");
-				return false;
+				// The negotiation only compares modifiers; whether the card
+				// takes the buffer shows here. Frames in shared memory need
+				// no import, so the stream is asked for those, once.
+				std::vector<uint8_t> storage;
+				std::vector<const spa_pod*> offers = _BuildOffers(false, storage);
+				if (offers.empty() ||
+					pw_stream_update_params(_stream, offers.data(), (uint32_t)offers.size()) < 0) {
+					Logger::Get().Error("A frame of the capture stream could not be imported");
+					return CopyResult::Failed;
+				}
+				_isDmabufGivenUp = true;
+				Logger::Get().Warn("A frame of the capture stream could not be imported; "
+					"the stream is asked for frames in shared memory instead");
+				return CopyResult::Skipped;
 			}
 		}
 		imported = texture.get();
-	} else {
+	}
+
+	if (!_PrepareOutput()) {
+		return CopyResult::Failed;
+	}
+	const VkExtent3D extent{ _output->width, _output->height, 1 };
+
+	if (!imported) {
 		if (!data.data) {
 			Logger::Get().Error("A frame of the capture stream is not mapped");
-			return false;
+			return CopyResult::Failed;
 		}
 
 		const size_t rowBytes = (size_t)extent.width * 4;
 		const size_t firstByte = (size_t)data.chunk->offset + (size_t)_srcRect.top * stride + (size_t)_srcRect.left * 4;
 		if (firstByte + (size_t)(extent.height - 1) * stride + rowBytes > data.maxsize) {
 			Logger::Get().Error("A frame of the capture stream is smaller than its format says");
-			return false;
+			return CopyResult::Failed;
 		}
 
 		const size_t stagingSize = rowBytes * extent.height;
 		if (!_stagingBuffer || _stagingBuffer->size < stagingSize) {
 			_stagingBuffer = _device->CreateBuffer(stagingSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
 			if (!_stagingBuffer) {
-				return false;
+				return CopyResult::Failed;
 			}
 		}
 
@@ -627,11 +669,11 @@ bool PipeWireFrameSource::_CopyFrame(pw_buffer* buffer) noexcept {
 		TransitionImage(cmd, _output->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 	})) {
-		return false;
+		return CopyResult::Failed;
 	}
 
 	_output->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-	return true;
+	return CopyResult::Copied;
 }
 
 std::string PipeWireFrameSource::DescribeFormat() const noexcept {

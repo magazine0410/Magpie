@@ -65,9 +65,12 @@ struct Capture {
 	PipeWireFrameSource source;
 	uint64_t sentFrames = 0;
 
-	// Starts the producer and connects the frame source to it
-	void Start(VulkanDevice& device, uint32_t width, uint32_t height, PipeWireFrameSource::Options options = {}) {
-		if (!producer.Start(width, height)) {
+	// Starts the producer and connects the frame source to it. With
+	// `fakeDmabufModifiers` the producer offers DMA-BUFs that cannot be
+	// imported.
+	void Start(VulkanDevice& device, uint32_t width, uint32_t height, PipeWireFrameSource::Options options = {},
+		std::vector<uint64_t> fakeDmabufModifiers = {}) {
+		if (!producer.Start(width, height, std::move(fakeDmabufModifiers))) {
 			SKIP("There is no PipeWire daemon to run the test stream on");
 		}
 		options.nodeId = producer.NodeId();
@@ -128,6 +131,56 @@ TEST_CASE("A frame arrives unchanged", "[capture]") {
 
 		CHECK(capture.source.GetStatistics().frames == 3);
 		CHECK(capture.source.GetStatistics().skippedFrames == 0);
+	});
+}
+
+TEST_CASE("A DMA-BUF that cannot be imported is replaced by shared memory", "[capture]") {
+	ForEachDevice([](VulkanDevice& device, const GraphicsCardInfo& card) {
+		const std::vector<uint64_t> modifiers = device.DmabufModifiers(VK_FORMAT_B8G8R8A8_UNORM);
+		if (!device.IsDmabufImportSupported() || modifiers.empty()) {
+			SKIP("The graphics card cannot import DMA-BUFs");
+		}
+		if (card.isSoftware) {
+			// It maps whatever it is given, so the buffer of this test,
+			// which is ordinary memory, works as a DMA-BUF there, and there
+			// is nothing to fall back from
+			return;
+		}
+
+		static constexpr uint32_t WIDTH = 317, HEIGHT = 211;
+		Capture capture;
+		capture.Start(device, WIDTH, HEIGHT, {}, modifiers);
+
+		// The stream offers DMA-BUFs with modifiers the card knows, so the
+		// two agree on them. The buffer is no DMA-BUF, the import fails,
+		// and the frame is lost.
+		capture.SendPicture(MakePicture(WIDTH, HEIGHT, 1));
+		CHECK(capture.producer.DmabufNegotiations() == 1);
+		CHECK(capture.source.Update() == FrameSourceState::Waiting);
+		CHECK_FALSE(capture.source.Output());
+
+		// The frames that follow are lost as well until the stream has
+		// changed to shared memory, some of them on the way; from then on
+		// they arrive
+		const std::vector<uint8_t> picture = MakePicture(WIDTH, HEIGHT, 2);
+		bool arrived = false;
+		for (int i = 0; i < 100 && !arrived; ++i) {
+			REQUIRE(PumpUntil(capture.source, [&] { return capture.producer.Push({ .pixels = picture }); }));
+			const uint64_t before = capture.source.GetStatistics().frames;
+			PumpUntil(capture.source, [&] { return capture.source.GetStatistics().frames > before; }, 100ms);
+			const FrameSourceState state = capture.source.Update();
+			REQUIRE(state != FrameSourceState::Error);
+			arrived = state == FrameSourceState::NewFrame;
+		}
+		REQUIRE(arrived);
+		CHECK(capture.ReadOutput(device) == picture);
+
+		const std::vector<uint8_t> next = MakePicture(WIDTH, HEIGHT, 3);
+		capture.SendPicture(next);
+		REQUIRE(capture.source.Update() == FrameSourceState::NewFrame);
+		CHECK(capture.ReadOutput(device) == next);
+		CHECK(capture.producer.DmabufNegotiations() == 1);
+		CHECK(capture.source.DescribeFormat().find("shared memory") != std::string::npos);
 	});
 }
 

@@ -2,11 +2,18 @@
 // compositor's screen cast. It delivers frames in shared memory with the
 // metadata a screen cast has: header, cursor and damage. It runs in a thread
 // of its own, as a compositor is another process.
+//
+// It can also offer DMA-BUFs with a list of modifiers, as a compositor does.
+// What it then delivers under that name is ordinary memory, which no
+// graphics card imports: the case of a buffer that passed the negotiation
+// and cannot be used.
 #pragma once
 #include <chrono>
 #include <cstring>
 #include <optional>
 #include <vector>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <pipewire/pipewire.h>
 #include <spa/param/video/format-utils.h>
 
@@ -47,10 +54,13 @@ public:
 		Stop();
 	}
 
-	// False if there is no PipeWire daemon to connect to
-	bool Start(uint32_t width, uint32_t height) {
+	// False if there is no PipeWire daemon to connect to. With
+	// `fakeDmabufModifiers` the stream offers DMA-BUFs with these modifiers
+	// before shared memory.
+	bool Start(uint32_t width, uint32_t height, std::vector<uint64_t> fakeDmabufModifiers = {}) {
 		_width = width;
 		_height = height;
+		_fakeDmabufModifiers = std::move(fakeDmabufModifiers);
 
 		pw_init(nullptr, nullptr);
 		_isPipeWireInitialized = true;
@@ -98,17 +108,52 @@ public:
 			if (that._filledBuffer == buffer) {
 				that._filledBuffer = nullptr;
 			}
+			if (that._OffersDmabuf()) {
+				spa_data& memory = buffer->buffer->datas[0];
+				if (memory.data) {
+					munmap(memory.data, memory.maxsize);
+				}
+				if (memory.fd >= 0) {
+					close((int)memory.fd);
+				}
+			}
+		};
+		// A stream with DMA-BUFs provides the memory of its buffers itself
+		_events.add_buffer = [](void* data, pw_buffer* buffer) {
+			TestStreamProducer& that = *(TestStreamProducer*)data;
+			if (!that._OffersDmabuf()) {
+				return;
+			}
+			spa_data& memory = buffer->buffer->datas[0];
+			const uint32_t size = (that._negotiatedWidth * 4 + ROW_PADDING) * that._negotiatedHeight;
+			const int fd = memfd_create("magpie-test-frame", MFD_CLOEXEC);
+			if (fd < 0 || ftruncate(fd, size) != 0) {
+				return;
+			}
+			memory.type = that._isDmabufNegotiated ? SPA_DATA_DmaBuf : SPA_DATA_MemFd;
+			memory.flags = SPA_DATA_FLAG_READWRITE;
+			memory.fd = fd;
+			memory.mapoffset = 0;
+			memory.maxsize = size;
+			memory.data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 		};
 		pw_stream_add_listener(_stream, &_listener, &_events, this);
 
-		uint8_t storage[1024];
+		uint8_t storage[4096];
 		spa_pod_builder builder;
 		spa_pod_builder_init(&builder, storage, sizeof(storage));
-		const spa_pod* format = _BuildFormat(&builder);
+		const spa_pod* formats[2];
+		uint32_t formatCount = 0;
+		if (_OffersDmabuf()) {
+			formats[formatCount++] = _BuildFormat(&builder, &_fakeDmabufModifiers);
+		}
+		formats[formatCount++] = _BuildFormat(&builder);
 		// Like a compositor, the stream drives itself: a frame goes out when
 		// there is one
 		const int result = pw_stream_connect(_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
-			pw_stream_flags(PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_MAP_BUFFERS), &format, 1);
+			pw_stream_flags(PW_STREAM_FLAG_DRIVER |
+				(_OffersDmabuf() ? PW_STREAM_FLAG_ALLOC_BUFFERS : PW_STREAM_FLAG_MAP_BUFFERS)),
+			formats, formatCount);
 
 		// The node gets its id when the stream has reached the paused state
 		bool ok = result >= 0;
@@ -160,6 +205,14 @@ public:
 		return _height;
 	}
 
+	// How often the consumer and the stream have agreed on DMA-BUFs
+	uint32_t DmabufNegotiations() {
+		pw_thread_loop_lock(_loop);
+		const uint32_t result = _dmabufNegotiations;
+		pw_thread_loop_unlock(_loop);
+		return result;
+	}
+
 	// A consumer is connected and the buffers exist
 	bool IsStreaming() {
 		pw_thread_loop_lock(_loop);
@@ -202,27 +255,67 @@ private:
 		return _width * 4 + ROW_PADDING;
 	}
 
-	const spa_pod* _BuildFormat(spa_pod_builder* builder) const {
+	bool _OffersDmabuf() const {
+		return !_fakeDmabufModifiers.empty();
+	}
+
+	// With `modifiers` an offer of DMA-BUFs: a choice of several modifiers,
+	// which the stream makes later, or the one it has made
+	const spa_pod* _BuildFormat(spa_pod_builder* builder, const std::vector<uint64_t>* modifiers = nullptr) const {
 		spa_rectangle size{ _width, _height };
 		spa_fraction rate{ 0, 1 };
-		return (const spa_pod*)spa_pod_builder_add_object(builder,
-			SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+		spa_pod_frame formatFrame;
+		spa_pod_builder_push_object(builder, &formatFrame, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat);
+		spa_pod_builder_add(builder,
 			SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
 			SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-			SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx),
+			SPA_FORMAT_VIDEO_format, SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx), 0);
+		if (modifiers && modifiers->size() == 1) {
+			spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_modifier, SPA_POD_PROP_FLAG_MANDATORY);
+			spa_pod_builder_long(builder, (int64_t)(*modifiers)[0]);
+		} else if (modifiers) {
+			spa_pod_frame modifierFrame;
+			spa_pod_builder_prop(builder, SPA_FORMAT_VIDEO_modifier,
+				SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
+			spa_pod_builder_push_choice(builder, &modifierFrame, SPA_CHOICE_Enum, 0);
+			// The first value of an enumeration is its default
+			spa_pod_builder_long(builder, (int64_t)(*modifiers)[0]);
+			for (uint64_t modifier : *modifiers) {
+				spa_pod_builder_long(builder, (int64_t)modifier);
+			}
+			spa_pod_builder_pop(builder, &modifierFrame);
+		}
+		spa_pod_builder_add(builder,
 			SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&size),
-			SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&rate));
+			SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&rate), 0);
+		return (const spa_pod*)spa_pod_builder_pop(builder, &formatFrame);
 	}
 
 	void _OnFormat(const spa_pod* param) {
+		uint8_t storage[4096];
+		spa_pod_builder builder;
+		spa_pod_builder_init(&builder, storage, sizeof(storage));
+
+		const spa_pod_prop* modifier = spa_pod_find_prop(param, nullptr, SPA_FORMAT_VIDEO_modifier);
+		if (modifier && (modifier->flags & SPA_POD_PROP_FLAG_DONT_FIXATE)) {
+			// Both sides can use several modifiers. The stream chooses one
+			// and offers the format again with it alone, as a compositor does.
+			uint32_t count = 0, choice = 0;
+			const spa_pod* values = spa_pod_get_values(&modifier->value, &count, &choice);
+			const std::vector<uint64_t> chosen{ (uint64_t)((const int64_t*)SPA_POD_BODY(values))[0] };
+			const spa_pod* formats[2]{ _BuildFormat(&builder, &chosen), _BuildFormat(&builder) };
+			pw_stream_update_params(_stream, formats, 2);
+			return;
+		}
+		_isDmabufNegotiated = modifier != nullptr;
+		if (_isDmabufNegotiated) {
+			++_dmabufNegotiations;
+		}
+
 		spa_video_info_raw info{};
 		spa_format_video_raw_parse(param, &info);
 		_negotiatedWidth = info.size.width;
 		_negotiatedHeight = info.size.height;
-
-		uint8_t storage[1024];
-		spa_pod_builder builder;
-		spa_pod_builder_init(&builder, storage, sizeof(storage));
 
 		const int stride = int(_negotiatedWidth * 4 + ROW_PADDING);
 		const spa_pod* params[4];
@@ -232,7 +325,8 @@ private:
 			SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
 			SPA_PARAM_BUFFERS_size, SPA_POD_Int(stride * (int)_negotiatedHeight),
 			SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride),
-			SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(1 << SPA_DATA_MemFd));
+			SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(
+				1 << (_isDmabufNegotiated ? SPA_DATA_DmaBuf : SPA_DATA_MemFd)));
 		params[1] = (const spa_pod*)spa_pod_builder_add_object(&builder,
 			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
 			SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
@@ -348,6 +442,9 @@ private:
 	uint32_t _negotiatedHeight = 0;
 	uint64_t _sequence = 0;
 	bool _isPipeWireInitialized = false;
+	std::vector<uint64_t> _fakeDmabufModifiers;
+	bool _isDmabufNegotiated = false;
+	uint32_t _dmabufNegotiations = 0;
 };
 
 }
