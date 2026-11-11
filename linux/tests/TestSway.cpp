@@ -1414,6 +1414,14 @@ namespace {
 // writes to a file.
 struct NestedFixture : SessionFixture {
 	bool StartCompositor(Size size) {
+		// The nested session's Sway has the runtime directory of the
+		// program that starts it. A machine without a session, such as a
+		// container, has none, so there it gets the one of this test.
+		static const bool hasRuntimeDir = std::getenv("XDG_RUNTIME_DIR") != nullptr;
+		if (!hasRuntimeDir) {
+			setenv("XDG_RUNTIME_DIR", sway->Dir().c_str(), 1);
+		}
+
 		std::string error;
 		const bool started = nested.Start({
 			.size = size,
