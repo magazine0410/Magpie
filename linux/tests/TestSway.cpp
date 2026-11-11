@@ -785,7 +785,7 @@ TEST_CASE("Key bindings made on Sway report their keys", "[sway][desktop]") {
 	// A virtual keyboard has to say itself which modifiers are down; the
 	// compositor does not work that out from its keys. Shift is the first
 	// modifier of a keymap and Alt the fourth.
-	static constexpr uint32_t SHIFT = 1, ALT = 8;
+	static constexpr uint32_t SHIFT = 1, CTRL = 4, ALT = 8;
 	const auto press = [&](std::initializer_list<uint32_t> keys, uint32_t modifiers = 0) {
 		for (uint32_t key : keys) {
 			keyboard.Key(key, true);
@@ -838,6 +838,45 @@ TEST_CASE("Key bindings made on Sway report their keys", "[sway][desktop]") {
 		return !activated.empty();
 	}));
 	CHECK(activated == std::vector<std::string>{ "scale" });
+
+	// Binding again replaces the keys: the old ones go to the window, the
+	// new ones are reported
+	const ShortcutRequest changed[]{ { "scale", "CTRL+ALT+b" } };
+	const auto rebound = bridge.BindShortcuts(changed);
+	REQUIRE(rebound.size() == 1);
+	CHECK(rebound[0].second == "Ctrl+Alt+B");
+	window->TakeKeyEvents();
+	press({ KEY_LEFTALT, KEY_LEFTSHIFT, KEY_A }, SHIFT | ALT);
+	keyCount = 0;
+	REQUIRE(fixture.WaitFor([&] {
+		for (const TestKeyEvent& event : window->TakeKeyEvents()) {
+			keyCount += !event.isModifiers && event.key == KEY_A ? 1 : 0;
+		}
+		return keyCount == 2;
+	}));
+	bridge.Dispatch();
+	CHECK(bridge.TakeActivatedShortcuts().empty());
+	press({ KEY_LEFTCTRL, KEY_LEFTALT, KEY_B }, CTRL | ALT);
+	REQUIRE(fixture.WaitFor([&] {
+		activated = bridge.TakeActivatedShortcuts();
+		return !activated.empty();
+	}));
+	CHECK(activated == std::vector<std::string>{ "scale" });
+
+	// With no shortcuts none is bound, which is how the service lets the
+	// user press new keys
+	CHECK(bridge.BindShortcuts({}).empty());
+	window->TakeKeyEvents();
+	press({ KEY_LEFTCTRL, KEY_LEFTALT, KEY_B }, CTRL | ALT);
+	keyCount = 0;
+	REQUIRE(fixture.WaitFor([&] {
+		for (const TestKeyEvent& event : window->TakeKeyEvents()) {
+			keyCount += !event.isModifiers && event.key == KEY_B ? 1 : 0;
+		}
+		return keyCount == 2;
+	}));
+	bridge.Dispatch();
+	CHECK(bridge.TakeActivatedShortcuts().empty());
 }
 
 namespace {

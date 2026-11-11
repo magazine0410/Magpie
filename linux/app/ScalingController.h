@@ -79,6 +79,15 @@ public:
 	// Opens the desktop's dialog for the keys
 	void ConfigureShortcuts();
 
+	// The desktop leaves the shortcuts to the programs: the keys are those
+	// of the settings, bound by the service, and can be changed in the
+	// window. RebindShortcuts applies a change; with `bound` false it lets
+	// go of the keys while the user presses new ones.
+	bool BindsOwnShortcuts() const noexcept {
+		return _isAvailable && _service.BindsOwnShortcuts();
+	}
+	void RebindShortcuts(bool bound = true);
+
 	// Windows that are open already can be scaled: the desktop has a back
 	// end. Without one only programs started in a nested session can.
 	bool HasDesktopBackEnd() const noexcept {

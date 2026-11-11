@@ -669,6 +669,11 @@ void SwayBridge::_Bind() noexcept {
 std::vector<std::pair<std::string, std::string>> SwayBridge::BindShortcuts(
 	std::span<const ShortcutRequest> shortcuts
 ) noexcept {
+	for (const Binding& binding : _bindings) {
+		_shared->Command("unbindsym " + binding.keys, true);
+	}
+	_bindings.clear();
+
 	std::vector<std::pair<std::string, std::string>> bound;
 	for (const ShortcutRequest& shortcut : shortcuts) {
 		const SwayKeys keys = SwayKeys::FromTrigger(shortcut.trigger);

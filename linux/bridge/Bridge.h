@@ -305,8 +305,9 @@ public:
 		return false;
 	}
 
-	// Binds the keys. For every shortcut that was bound, the result has its
-	// id and the keys as a text for the user.
+	// Binds the keys, in place of those bound before; with no shortcuts
+	// none is bound any more. For every shortcut that was bound, the result
+	// has its id and the keys as a text for the user.
 	virtual std::vector<std::pair<std::string, std::string>> BindShortcuts(
 		std::span<const ShortcutRequest> /*shortcuts*/) noexcept {
 		return {};

@@ -237,44 +237,14 @@ bool ScalingService::Initialize(Config config, std::string& error) noexcept {
 	}
 
 	if (_config.useShortcuts) {
-		const std::shared_ptr<const Settings> settings = _config.settings ? _config.settings() : nullptr;
-		const auto trigger = [&](ShortcutAction action) {
-			return settings ? ShortcutToPortalTrigger(settings->shortcuts[(size_t)action]) : std::string();
-		};
-		const PortalShortcuts::Shortcut wanted[]{
-			{
-				SHORTCUT_SCALE,
-				"Scale the active window to fullscreen, or stop scaling",
-				trigger(ShortcutAction::Scale)
-			},
-			{
-				SHORTCUT_SCALE_WINDOWED,
-				"Scale the active window into a window, or stop scaling",
-				trigger(ShortcutAction::WindowedModeScale)
-			},
-			{
-				SHORTCUT_TOOLBAR,
-				"Show or hide the toolbar on the scaled picture",
-				trigger(ShortcutAction::Toolbar)
-			},
-			{
-				SHORTCUT_SCREENSHOT,
-				"Save a screenshot of the scaled picture",
-				trigger(ShortcutAction::TakeScreenshot)
-			}
-		};
 		if (_bridge && _bridge->HasOwnShortcuts()) {
 			// The keys of the settings, bound while the service runs
-			std::vector<ShortcutRequest> requests;
-			for (const PortalShortcuts::Shortcut& shortcut : wanted) {
-				requests.push_back({ shortcut.id, shortcut.preferredTrigger });
-			}
-			_bridgeShortcuts = _bridge->BindShortcuts(requests);
 			_hasBridgeShortcuts = true;
+			_BindBridgeShortcuts();
 			if (_bridgeShortcuts.empty()) {
 				Logger::Get().Warn("No global shortcut is registered");
 			}
-		} else if (_shortcuts.Initialize(_bus, _config.appId, wanted)) {
+		} else if (_shortcuts.Initialize(_bus, _config.appId, _WantedShortcuts())) {
 			_canConfigureShortcuts = true;
 		} else {
 			Logger::Get().Warn("No global shortcut is registered");
@@ -283,6 +253,58 @@ bool ScalingService::Initialize(Config config, std::string& error) noexcept {
 	_UpdateShortcuts();
 
 	return true;
+}
+
+std::vector<PortalShortcuts::Shortcut> ScalingService::_WantedShortcuts() const noexcept {
+	const std::shared_ptr<const Settings> settings = _config.settings ? _config.settings() : nullptr;
+	const auto trigger = [&](ShortcutAction action) {
+		return settings ? ShortcutToPortalTrigger(settings->shortcuts[(size_t)action]) : std::string();
+	};
+	return {
+		{
+			SHORTCUT_SCALE,
+			"Scale the active window to fullscreen, or stop scaling",
+			trigger(ShortcutAction::Scale)
+		},
+		{
+			SHORTCUT_SCALE_WINDOWED,
+			"Scale the active window into a window, or stop scaling",
+			trigger(ShortcutAction::WindowedModeScale)
+		},
+		{
+			SHORTCUT_TOOLBAR,
+			"Show or hide the toolbar on the scaled picture",
+			trigger(ShortcutAction::Toolbar)
+		},
+		{
+			SHORTCUT_SCREENSHOT,
+			"Save a screenshot of the scaled picture",
+			trigger(ShortcutAction::TakeScreenshot)
+		}
+	};
+}
+
+void ScalingService::_BindBridgeShortcuts() noexcept {
+	std::vector<ShortcutRequest> requests;
+	for (const PortalShortcuts::Shortcut& shortcut : _WantedShortcuts()) {
+		requests.push_back({ shortcut.id, shortcut.preferredTrigger });
+	}
+	_bridgeShortcuts = _bridge->BindShortcuts(requests);
+}
+
+void ScalingService::RebindShortcuts(bool bound) noexcept {
+	_Post([this, bound] {
+		if (!_hasBridgeShortcuts || !_bridge) {
+			return;
+		}
+		if (bound) {
+			_BindBridgeShortcuts();
+			_UpdateShortcuts();
+		} else {
+			// What the window shows stays as it is meanwhile
+			_bridge->BindShortcuts({});
+		}
+	});
 }
 
 void ScalingService::_UpdateShortcuts() noexcept {

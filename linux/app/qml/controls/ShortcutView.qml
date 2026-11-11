@@ -1,6 +1,7 @@
 // The key of a global shortcut and a button for changing it. Where the
-// desktop owns the keys, the button opens its dialog; where it has no such
-// dialog, the keys are those of config.json and there is no button.
+// desktop owns the keys, the button opens its dialog; where the desktop
+// leaves them to the programs, it asks for the dialog that records new keys
+// (ShortcutRecorder).
 // Counterpart of ShortcutControl of the Windows user interface, which records
 // the keys itself.
 import QtQuick
@@ -18,6 +19,9 @@ RowLayout {
     // The desktop has a dialog for the keys
     property bool canChange: true
     signal changeRequested
+    // The keys are Magpie's own to choose
+    property bool canRecord: false
+    signal recordRequested
 
     spacing: 8
 
@@ -30,11 +34,12 @@ RowLayout {
 
     Button {
         text: qsTrId("Linux_Shortcut_Change")
-        visible: root.canChange
-        enabled: root.available
-        onClicked: root.changeRequested()
+        objectName: "shortcutChange"
+        visible: root.canChange || root.canRecord
+        enabled: root.available || root.canRecord
+        onClicked: root.canRecord ? root.recordRequested() : root.changeRequested()
 
-        ToolTip.visible: hovered
+        ToolTip.visible: hovered && !root.canRecord
         ToolTip.delay: 600
         ToolTip.text: qsTrId("Linux_Shortcut_ChangeToolTip")
     }

@@ -6,3 +6,4 @@ ExpanderItem 1.0 ExpanderItem.qml
 InfoBar 1.0 InfoBar.qml
 ShortcutView 1.0 ShortcutView.qml
 NumberField 1.0 NumberField.qml
+ShortcutRecorder 1.0 ShortcutRecorder.qml

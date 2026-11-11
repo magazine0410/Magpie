@@ -104,6 +104,24 @@ TEST_CASE("Scaling options are built from a profile and the settings", "[Profile
 	}
 }
 
+TEST_CASE("A shortcut that Magpie binds itself needs a modifier and a key it knows", "[ProfileOptions]") {
+	CHECK(IsBindableShortcut({ .code = 'A', .alt = true, .shift = true }));
+	CHECK(IsBindableShortcut({ .code = '5', .ctrl = true }));
+	CHECK(IsBindableShortcut({ .code = 0x7B, .shift = true }));
+	CHECK(IsBindableShortcut({ .code = 'Q', .win = true }));
+	// No modifier, no key, and a key without a known name (VK_SPACE)
+	CHECK_FALSE(IsBindableShortcut({ .code = 'A' }));
+	CHECK_FALSE(IsBindableShortcut({ .code = 0x70 }));
+	CHECK_FALSE(IsBindableShortcut({ .ctrl = true }));
+	CHECK_FALSE(IsBindableShortcut({ .code = 0x20, .ctrl = true }));
+
+	CHECK(ShortcutToText({ .code = 'A', .alt = true, .shift = true }) == "Alt+Shift+A");
+	CHECK(ShortcutToText({ .code = 'Z', .win = true, .ctrl = true }) == "Ctrl+Super+Z");
+	CHECK(ShortcutToText({ .code = 0x7B, .shift = true }) == "Shift+F12");
+	CHECK(ShortcutToText({ .code = '5', .ctrl = true }) == "Ctrl+5");
+	CHECK(ShortcutToText({ .code = 0x20, .ctrl = true }) == "");
+}
+
 TEST_CASE("Shortcuts are written the way the desktop portal reads them", "[ProfileOptions]") {
 	// The default of the Scale action
 	CHECK(ShortcutToPortalTrigger({ .code = 'A', .alt = true, .shift = true }) == "ALT+SHIFT+a");

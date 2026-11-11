@@ -152,6 +152,18 @@ public:
 	// Opens the desktop's dialog for the keys of the shortcuts
 	void ConfigureShortcuts() noexcept;
 
+	// The desktop leaves the shortcuts to the programs, and the service has
+	// bound those of the settings itself
+	bool BindsOwnShortcuts() const noexcept {
+		return _hasBridgeShortcuts;
+	}
+
+	// For such a desktop: binds the shortcuts of the settings anew, after
+	// they were changed; or with `bound` false none, for the time in which
+	// the user presses the keys of a new shortcut, which then have to reach
+	// the window and not start scaling
+	void RebindShortcuts(bool bound = true) noexcept;
+
 	// Whether the desktop has such a dialog. Where it has none, the keys
 	// are those of the settings. Valid after Initialize.
 	bool CanConfigureShortcuts() const noexcept {
@@ -182,6 +194,10 @@ private:
 	void _SetState(State state) noexcept;
 	void _AnnounceChanges() noexcept;
 	void _UpdateShortcuts() noexcept;
+	// What is asked of the desktop: ids, descriptions and the keys of the
+	// settings
+	std::vector<PortalShortcuts::Shortcut> _WantedShortcuts() const noexcept;
+	void _BindBridgeShortcuts() noexcept;
 	void _OnShortcut(const std::string& id) noexcept;
 
 	Window _Identify(const WindowInfo& info) const noexcept;
@@ -217,7 +233,7 @@ private:
 	// whose portal has none; then _bridgeShortcuts has what was bound
 	PortalShortcuts _shortcuts;
 	BoundShortcuts _bridgeShortcuts;
-	bool _hasBridgeShortcuts = false;
+	std::atomic<bool> _hasBridgeShortcuts = false;
 	std::atomic<bool> _canConfigureShortcuts = false;
 	std::unique_ptr<ScalingSession> _session;
 	State _state = State::Idle;

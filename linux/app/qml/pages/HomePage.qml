@@ -11,6 +11,12 @@ PageFrame {
 
     title: qsTrId("Home_PageFrame.Title")
 
+    ShortcutRecorder {
+        id: recorder
+        objectName: "shortcutRecorder"
+        vm: page.vm
+    }
+
     InfoBar {
         visible: !page.vm.isEngineAvailable
         severity: InfoBar.Severity.Error
@@ -37,6 +43,8 @@ PageFrame {
                 available: page.vm.hasShortcuts
                 canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
+                canRecord: page.vm.canRecordShortcuts
+                onRecordRequested: recorder.record(0, qsTrId("Home_Activation_FullscreenScaling_ShortcutControl.Title"))
             }
         }
 
@@ -48,6 +56,8 @@ PageFrame {
                 available: page.vm.hasShortcuts
                 canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
+                canRecord: page.vm.canRecordShortcuts
+                onRecordRequested: recorder.record(1, qsTrId("Home_Activation_WindowedScaling_ShortcutControl.Title"))
             }
         }
 
@@ -130,6 +140,8 @@ PageFrame {
                 available: page.vm.hasShortcuts
                 canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
+                canRecord: page.vm.canRecordShortcuts
+                onRecordRequested: recorder.record(2, qsTrId("Home_Toolbar_StateToggle_ShortcutControl.Title"))
             }
         }
 
@@ -141,6 +153,8 @@ PageFrame {
                 available: page.vm.hasShortcuts
                 canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
+                canRecord: page.vm.canRecordShortcuts
+                onRecordRequested: recorder.record(3, qsTrId("Home_Toolbar_TakeScreenshot_ShortcutControl.Title"))
             }
         }
     }

@@ -61,4 +61,27 @@ inline std::string ShortcutToPortalTrigger(const Shortcut& shortcut) {
 	return result + key;
 }
 
+// Whether Magpie can bind the shortcut itself on a desktop that leaves that
+// to programs: a letter, a digit or F1 to F24 with at least one modifier,
+// which is the rule of the Windows version for the keys this port knows.
+inline bool IsBindableShortcut(const Shortcut& shortcut) {
+	return (shortcut.ctrl || shortcut.alt || shortcut.shift || shortcut.win) &&
+		!ShortcutToPortalTrigger(shortcut).empty();
+}
+
+// The shortcut as a text for the user, for example "Alt+Shift+A"; empty for
+// keys that ShortcutToPortalTrigger does not know
+inline std::string ShortcutToText(const Shortcut& shortcut) {
+	const std::string trigger = ShortcutToPortalTrigger(shortcut);
+	if (trigger.empty()) {
+		return {};
+	}
+	std::string key = trigger.substr(trigger.rfind('+') == std::string::npos ? 0 : trigger.rfind('+') + 1);
+	if (key.size() == 1 && key[0] >= 'a' && key[0] <= 'z') {
+		key[0] = char(key[0] - 'a' + 'A');
+	}
+	return std::string(shortcut.ctrl ? "Ctrl+" : "") + (shortcut.alt ? "Alt+" : "") +
+		(shortcut.shift ? "Shift+" : "") + (shortcut.win ? "Super+" : "") + key;
+}
+
 }

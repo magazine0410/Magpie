@@ -22,6 +22,7 @@ class HomeViewModel : public QObject {
 	Q_PROPERTY(QString screenshotShortcut READ ScreenshotShortcut NOTIFY Changed)
 	Q_PROPERTY(bool hasShortcuts READ HasShortcuts NOTIFY Changed)
 	Q_PROPERTY(bool canConfigureShortcuts READ CanConfigureShortcuts NOTIFY Changed)
+	Q_PROPERTY(bool canRecordShortcuts READ CanRecordShortcuts NOTIFY Changed)
 	// Windows that are open already can be scaled on this desktop
 	Q_PROPERTY(bool hasDesktopBackEnd READ HasDesktopBackEnd NOTIFY Changed)
 
@@ -69,6 +70,24 @@ public:
 	bool CanConfigureShortcuts() const;
 	bool HasDesktopBackEnd() const;
 	Q_INVOKABLE void configureShortcuts();
+
+	// A desktop that leaves the shortcuts to the programs: the keys are
+	// those of the settings, and the window has a dialog that records new
+	// ones. `action` is a ShortcutAction; `key` and `modifiers` are what Qt
+	// reports for a key press.
+	bool CanRecordShortcuts() const;
+	// While the dialog is open the keys must reach it, so none is bound
+	Q_INVOKABLE void beginShortcutRecording();
+	Q_INVOKABLE void endShortcutRecording();
+	// The keys as the window writes them, for example "Alt+Shift+A"; empty
+	// if they are no shortcut that can be bound
+	Q_INVOKABLE QString shortcutText(int key, int modifiers) const;
+	// Why the keys cannot be the shortcut of the action, as a text for the
+	// user; empty if they can
+	Q_INVOKABLE QString shortcutProblem(int action, int key, int modifiers) const;
+	// Makes them the shortcut of the action; false if shortcutProblem has
+	// something to say
+	Q_INVOKABLE bool setShortcut(int action, int key, int modifiers);
 
 	QString TimerDescription() const;
 	bool IsTimerOn() const;

@@ -63,6 +63,66 @@ void HomeViewModel::configureShortcuts() {
 	_scaling.ConfigureShortcuts();
 }
 
+// What Qt reports for a key press, as the settings store a shortcut: the
+// code of the key as Windows numbers it, which for letters and digits is
+// also Qt's number. A key that cannot be bound gives no code.
+static Shortcut ShortcutFromKeyPress(int key, int modifiers) {
+	Shortcut shortcut;
+	shortcut.ctrl = modifiers & Qt::ControlModifier;
+	shortcut.alt = modifiers & Qt::AltModifier;
+	shortcut.shift = modifiers & Qt::ShiftModifier;
+	shortcut.win = modifiers & Qt::MetaModifier;
+	if ((key >= Qt::Key_A && key <= Qt::Key_Z) || (key >= Qt::Key_0 && key <= Qt::Key_9)) {
+		shortcut.code = (uint8_t)key;
+	} else if (key >= Qt::Key_F1 && key <= Qt::Key_F24) {
+		// VK_F1 and the keys after it
+		shortcut.code = (uint8_t)(0x70 + (key - Qt::Key_F1));
+	}
+	return shortcut;
+}
+
+bool HomeViewModel::CanRecordShortcuts() const {
+	return _scaling.BindsOwnShortcuts();
+}
+
+void HomeViewModel::beginShortcutRecording() {
+	_scaling.RebindShortcuts(false);
+}
+
+void HomeViewModel::endShortcutRecording() {
+	_scaling.RebindShortcuts(true);
+}
+
+QString HomeViewModel::shortcutText(int key, int modifiers) const {
+	return QString::fromStdString(ShortcutToText(ShortcutFromKeyPress(key, modifiers)));
+}
+
+QString HomeViewModel::shortcutProblem(int action, int key, int modifiers) const {
+	if (action < 0 || action >= (int)ShortcutAction::COUNT_OR_NONE) {
+		return qtTrId("ShortcutDialog_InvalidShortcut");
+	}
+	const Shortcut shortcut = ShortcutFromKeyPress(key, modifiers);
+	if (!IsBindableShortcut(shortcut)) {
+		return qtTrId("ShortcutDialog_InvalidShortcut");
+	}
+	for (int other = 0; other < (int)ShortcutAction::COUNT_OR_NONE; ++other) {
+		if (other != action && _data().shortcuts[(size_t)other] == shortcut) {
+			return qtTrId("ShortcutDialog_InUse");
+		}
+	}
+	return {};
+}
+
+bool HomeViewModel::setShortcut(int action, int key, int modifiers) {
+	if (!shortcutProblem(action, key, modifiers).isEmpty()) {
+		return false;
+	}
+	_data().shortcuts[(size_t)action] = ShortcutFromKeyPress(key, modifiers);
+	_Save();
+	// The service binds the new keys when the dialog closes
+	return true;
+}
+
 QString HomeViewModel::TimerDescription() const {
 	return Localization::Format("Home_Activation_Timer_Description", QString::number(_data().countdownSeconds));
 }

@@ -139,6 +139,12 @@ void ScalingController::ConfigureShortcuts() {
 	}
 }
 
+void ScalingController::RebindShortcuts(bool bound) {
+	if (_isAvailable) {
+		_service.RebindShortcuts(bound);
+	}
+}
+
 void ScalingController::LaunchNested(ScalingService::LaunchRequest request) {
 	if (IsAvailable()) {
 		_service.LaunchNested(std::move(request));

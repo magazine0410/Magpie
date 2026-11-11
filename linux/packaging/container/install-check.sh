@@ -38,7 +38,7 @@ check "magpie-scale-image lists the software renderer" "$(magpie-scale-image --l
 python3 - <<'PY'
 import struct, zlib
 w, h = 64, 48
-rows = b"".join(b"\0" + bytes((x * 4 % 256, y * 5 % 256, (x + y) % 256) * 1 for x in range(w)) for y in range(h))
+rows = b"".join(b"\0" + bytes(v for x in range(w) for v in (x * 4 % 256, y * 5 % 256, (x + y) % 256)) for y in range(h))
 def chunk(kind, data):
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 open("/tmp/in.png", "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
@@ -46,7 +46,7 @@ open("/tmp/in.png", "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pac
 PY
 magpie-scale-image --effect Lanczos,scale=2 /tmp/in.png /tmp/out.png > /out/scale-image.log 2>&1
 check "an effect of the installed directory scales a picture" "$? $(python3 -c 'import struct; d = open("/tmp/out.png", "rb").read(); print(*struct.unpack(">II", d[16:24]))' 2>&1)" "0 128 96"
-magpie-fxc /usr/share/magpie/effects/FSR/FSR_EASU.hlsl > /out/fxc.log 2>&1
+magpie-fxc /usr/share/magpie/effects FSR/FSR_EASU > /out/fxc.log 2>&1
 check "magpie-fxc compiles an installed effect" "$?" "0"
 
 # A session bus that cannot start services

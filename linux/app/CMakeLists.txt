@@ -105,6 +105,7 @@ set(QML_FILES
 	qml/controls/SettingsCard.qml
 	qml/controls/SettingsExpander.qml
 	qml/controls/SettingsGroup.qml
+	qml/controls/ShortcutRecorder.qml
 	qml/controls/ShortcutView.qml
 	qml/controls/qmldir
 	qml/pages/AboutPage.qml

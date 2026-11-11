@@ -352,6 +352,54 @@ TEST_CASE("Profiles are made, shown, changed, moved and deleted", "[app]") {
 	CheckNoWarnings();
 }
 
+TEST_CASE("The dialog for a shortcut records keys and saves them", "[app]") {
+	TestWindow test;
+	const Shortcut before = test.Data().shortcuts[(size_t)ShortcutAction::Scale];
+
+	// Without a scaling service the Home page has no button for it; the
+	// dialog is the same as on a desktop where Magpie binds the keys
+	QObject* recorder = test.window->findChild<QObject*>("shortcutRecorder");
+	REQUIRE(recorder);
+	REQUIRE(QMetaObject::invokeMethod(recorder, "record",
+		Q_ARG(QVariant, (int)ShortcutAction::Scale), Q_ARG(QVariant, QStringLiteral("Fullscreen scaling shortcut"))));
+	QTest::qWait(250);
+	CHECK(recorder->property("opened").toBool());
+	CHECK_FALSE(recorder->property("canSave").toBool());
+
+	// A key without a modifier is no shortcut
+	test.PressKey(Qt::Key_B);
+	CHECK_FALSE(recorder->property("canSave").toBool());
+	CHECK(recorder->property("problem").toString() == "Invalid shortcut");
+
+	// The keys of another shortcut are taken
+	test.PressKey(Qt::Key_Q, Qt::AltModifier | Qt::ShiftModifier);
+	CHECK(recorder->property("problem").toString() == "Already in use");
+	CHECK_FALSE(recorder->property("canSave").toBool());
+
+	test.PressKey(Qt::Key_B, Qt::ControlModifier | Qt::AltModifier);
+	CHECK(recorder->property("problem").toString().isEmpty());
+	CHECK(recorder->property("canSave").toBool());
+	SavePicture(test.window, "shortcut-recorder");
+	// Nothing is saved before the user says so
+	CHECK(test.Data().shortcuts[(size_t)ShortcutAction::Scale] == before);
+
+	REQUIRE(QMetaObject::invokeMethod(recorder, "save"));
+	QTest::qWait(250);
+	CHECK_FALSE(recorder->property("opened").toBool());
+	CHECK(test.Data().shortcuts[(size_t)ShortcutAction::Scale] == Shortcut{ .code = 'B', .ctrl = true, .alt = true });
+
+	// Escape leaves the shortcut as it is
+	REQUIRE(QMetaObject::invokeMethod(recorder, "record",
+		Q_ARG(QVariant, (int)ShortcutAction::Toolbar), Q_ARG(QVariant, QStringLiteral("Toolbar"))));
+	QTest::qWait(250);
+	test.PressKey(Qt::Key_F5, Qt::ControlModifier);
+	CHECK(recorder->property("canSave").toBool());
+	test.PressKey(Qt::Key_Escape);
+	CHECK_FALSE(recorder->property("opened").toBool());
+	CHECK(test.Data().shortcuts[(size_t)ShortcutAction::Toolbar] == Shortcut{ .code = 'D', .alt = true, .shift = true });
+	CheckNoWarnings();
+}
+
 TEST_CASE("The dialog for a new profile says so when there is no window", "[app]") {
 	TestWindow test;
 

@@ -16,7 +16,7 @@ echo "rpmbuild exit status: $status"
 cp /work/rpmbuild/RPMS/*/*.rpm /work/rpmbuild/SRPMS/*.rpm /out/
 
 BUILD=$(dirname "$(find /work/rpmbuild/BUILD -name CTestTestfile.cmake -path '*redhat-linux-build/CTestTestfile.cmake' | head -1)")
-SOURCE=$(dirname "$(dirname "$BUILD")")
+SOURCE=$(dirname "$BUILD")
 echo "build tree: $BUILD"
 # The install check uses the test window, which is not part of the package
 cp "$BUILD/tests/magpie_test_window" /out/
