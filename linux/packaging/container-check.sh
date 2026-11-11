@@ -32,12 +32,14 @@ for step in "${STEPS[@]}"; do
 		podman build -q -t localhost/magpie-build:f44 -f "$HERE/container/Containerfile" "$HERE"
 		# Without a label of its own the container can read the repository
 		# as it is; nothing of it is relabelled
-		podman run --rm --security-opt label=disable --tmpfs /work:exec \
+		# SYS_NICE: Fedora's sway has that capability on its file, and a
+		# container without it cannot start the program at all
+		podman run --rm --security-opt label=disable --cap-add SYS_NICE --tmpfs /work:exec \
 			-v "$REPO":/src:ro -v "$OUT":/out \
 			localhost/magpie-build:f44 bash /src/linux/packaging/container/build-in-container.sh
 		;;
 	install)
-		podman run --rm --security-opt label=disable \
+		podman run --rm --security-opt label=disable --cap-add SYS_NICE \
 			-v "$HERE/container":/scripts:ro -v "$OUT":/out -v "$OUT/dnf-cache":/var/cache/libdnf5 \
 			registry.fedoraproject.org/fedora:44 bash /scripts/install-check.sh
 		;;

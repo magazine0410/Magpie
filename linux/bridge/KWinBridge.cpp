@@ -561,8 +561,13 @@ std::vector<OutputInfo> KWinBridge::ListOutputs() noexcept {
 	for (const std::unique_ptr<Connection::Output>& output : _connection->outputs) {
 		if (output->isComplete) {
 			result.push_back(output->Info());
-			// The name KWin gives the outputs of its screen cast protocol
-			result.back().isVirtual = output->info.name.starts_with("Virtual-");
+			// The name KWin gives the outputs of its screen cast protocol:
+			// "Virtual-" and what the program called it. A KWin that runs
+			// without a screen (kwin_wayland --virtual) numbers its own
+			// outputs behind the same word; those are its monitors.
+			const std::string& name = output->info.name;
+			result.back().isVirtual = name.starts_with("Virtual-") &&
+				!std::all_of(name.begin() + 8, name.end(), [](char c) { return c >= '0' && c <= '9'; });
 		}
 	}
 	return result;

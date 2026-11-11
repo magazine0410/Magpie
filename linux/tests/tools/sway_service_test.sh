@@ -83,9 +83,11 @@ done
 WAYLAND_DISPLAY=$(basename "$(ls "$T"/wayland-* | grep -v '\.lock$' | head -1)")
 export WAYLAND_DISPLAY
 if ! swaymsg -q -- output HEADLESS-1 mode --custom 1920x1080@120Hz position 0 0; then
-	echo "Sway did not start; see $T/sway.log"
-	FAILED=1
-	exit 1
+	# Not a fault of Magpie: for example a container that may not start
+	# Sway, whose file has a capability
+	echo "Sway did not start, so there is nothing to test with; skipping. Its log:"
+	head -5 "$T/sway.log"
+	exit 77
 fi
 
 # One line per window: OUTPUT TITLE X Y WIDTHxHEIGHT BORDER [focused]
