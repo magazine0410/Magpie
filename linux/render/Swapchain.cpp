@@ -89,10 +89,14 @@ bool Swapchain::Initialize(
 		_availablePresentModes.resize(count);
 		vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &count, _availablePresentModes.data());
 
-		const bool isAvailable = std::find(_availablePresentModes.begin(), _availablePresentModes.end(),
-			presentMode) != _availablePresentModes.end();
-		// Every surface has FIFO
-		_presentMode = isAvailable ? presentMode : VK_PRESENT_MODE_FIFO_KHR;
+		const auto isAvailable = [&](VkPresentModeKHR mode) {
+			return std::find(_availablePresentModes.begin(), _availablePresentModes.end(), mode) !=
+				_availablePresentModes.end();
+		};
+		// Without the wanted mode the newest frame is still shown where that
+		// is possible; every surface has FIFO
+		_presentMode = isAvailable(presentMode) ? presentMode :
+			isAvailable(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
 	}
 
 	const VkDevice vkDevice = device.Device();

@@ -307,6 +307,13 @@ TEST_CASE("Profiles are made, shown, changed, moved and deleted", "[app]") {
 		test.PressKey(Qt::Key_Return);
 		CHECK(test.Data().profiles[0].nestedHeight == 16384);
 		CHECK(test.Find("profileNestedHeight")->property("text").toString() == "16384");
+
+		// Off unless the user turns it on
+		QQuickItem* tearingSwitch = test.Find("profileAllowTearing");
+		REQUIRE(tearingSwitch);
+		CHECK_FALSE(tearingSwitch->property("checked").toBool());
+		test.Click("profileAllowTearing");
+		CHECK(test.Data().profiles[0].isTearingAllowed);
 		SavePicture(test.window, "profile-nested");
 	}
 

@@ -70,6 +70,7 @@ class ProfileViewModel : public QObject {
 	// The desktop has no back end, so the program is started that way
 	// whatever the profile says
 	Q_PROPERTY(bool isNestedOnly READ IsNestedOnly CONSTANT)
+	Q_PROPERTY(bool isTearingAllowed READ IsTearingAllowed WRITE SetIsTearingAllowed NOTIFY Changed)
 	Q_PROPERTY(int outputAlignment READ OutputAlignment WRITE SetOutputAlignment NOTIFY Changed)
 
 public:
@@ -187,6 +188,7 @@ public:
 	void SetLaunchParameters(const QString& value);
 
 	MAGPIE_SETTING(bool, IsLaunchedNested, _data().isLaunchedNested)
+	MAGPIE_SETTING(bool, IsTearingAllowed, _data().isTearingAllowed)
 	double NestedWidth() const {
 		return _data().nestedWidth;
 	}

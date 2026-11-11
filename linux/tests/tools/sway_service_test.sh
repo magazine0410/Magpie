@@ -258,7 +258,7 @@ config["profiles"] = [
     config["profiles"][0],
     {"name": "Nested test", "packaged": False, "pathRule": program, "classNameRule": "magpie.test",
      "autoScale": 0, "scalingMode": 0, "adjustCursorSpeed": False,
-     "launchNested": True, "nestedWidth": 800, "nestedHeight": 600}
+     "launchNested": True, "nestedWidth": 800, "nestedHeight": 600, "allowTearing": True}
 ]
 json.dump(config, open(path, "w"), indent=2)
 PY
@@ -267,6 +267,7 @@ start_engine
 "$CTL" launch --size 640x480 -- "$WINDOW" --title nested-game --resizable
 check "launch a program in a nested session" "$(wait_status scaling 10)" "scaling"
 check "what is scaled is a nested session" "$("$CTL" nested)" "yes"
+check "its picture waits for the monitor's refresh" "$(grep -c "may tear" "$T/engine.log")" "0"
 NESTED_SWAY=$(pgrep -x -P "$ENGINE_PID" sway)
 check "the service has started a Sway of its own" "$(echo "$NESTED_SWAY" | wc -w)" "1"
 for i in $(seq 1 30); do [ -n "$(picture nested-game)" ] && break; sleep 0.1; done
@@ -287,6 +288,17 @@ sleep 0.5
 check "its Sway has ended" "$(kill -0 "$NESTED_SWAY" 2> /dev/null && echo running || echo ended)" "ended"
 check "the picture is gone" "$(picture nested-game)" ""
 
+"$CTL" launch --tearing --size 640x480 -- "$WINDOW" --title nested-game --resizable
+check "launched with tearing allowed" "$(wait_status scaling 10) $(grep -c "may tear" "$T/engine.log")" "scaling 1"
+"$CTL" window
+sleep 1
+check "in a window the picture does not tear" "$(wait_status scaling 5) $(grep -c "may tear" "$T/engine.log")" "scaling 1"
+"$CTL" scale
+sleep 1
+check "fullscreen again it may" "$(wait_status scaling 5) $(grep -c "may tear" "$T/engine.log")" "scaling 2"
+"$CTL" stop
+check "stop" "$(wait_status idle 5)" "idle"
+
 "$CTL" launch --windowed --size 400x300 -- "$WINDOW" --title short-lived --duration 1.5
 check "a program that ends by itself" "$(wait_status scaling 10)" "scaling"
 check "the session ends a few seconds after it" "$(wait_status idle 10)" "idle"
@@ -294,6 +306,7 @@ check "the session ends a few seconds after it" "$(wait_status idle 10)" "idle"
 "$CTL" launch --profile "Nested test" -- "$WINDOW" --title nested-game --resizable
 check "launched with a profile" "$(wait_status scaling 10)" "scaling"
 check "the session has the size of the profile" "$(grep -c "Nested session started: 800x600" "$T/engine.log")" "1"
+check "and may tear as the profile says" "$(grep -c "may tear" "$T/engine.log")" "3"
 NESTED_SWAY=$(pgrep -x -P "$ENGINE_PID" sway)
 check "still running after SIGTERM" "$(stop_engine TERM)" "no"
 sleep 0.5

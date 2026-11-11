@@ -65,6 +65,7 @@ struct Profile {
 		isLaunchedNested = other.isLaunchedNested;
 		nestedWidth = other.nestedWidth;
 		nestedHeight = other.nestedHeight;
+		isTearingAllowed = other.isTearingAllowed;
 		outputAlignment = other.outputAlignment;
 		scalingFlags = other.scalingFlags;
 
@@ -95,6 +96,10 @@ struct Profile {
 	bool isLaunchedNested = false;
 	uint32_t nestedWidth = 1280;
 	uint32_t nestedHeight = 720;
+	// Only on Linux: a nested session that covers a monitor may show a new
+	// frame without waiting for the monitor's refresh, if the desktop
+	// permits that. Less delay, and a visible break line in moving pictures.
+	bool isTearingAllowed = false;
 
 	AutoScale autoScale = AutoScale::Disabled;
 

@@ -103,6 +103,9 @@ def main():
         len(magpie), len(known), len(shown), len(known) - len(shown)))
     if not shown:
         return 1
+    # The first frames wait for the effects to be compiled
+    if len(shown) > 300:
+        shown = shown[100:]
 
     first, last = int(shown[0]["frame"], 16), int(shown[-1]["frame"], 16)
     drawn_meanwhile = sum(1 for number in drawn if first <= number <= last)
@@ -132,7 +135,11 @@ def main():
 
     # A click is answered by the first frame with at least the number noted
     clicks = []
+    begin, end = int(shown[0]["presented"]), int(shown[-1]["presented"])
     for click in (r for r in source if "click" in r):
+        # The log of the source may cover more than this run
+        if not begin <= int(click["seen"]) <= end:
+            continue
         answer = int(click["frame"], 16)
         times = [int(r["presented"]) for r in shown if int(r["frame"], 16) >= answer]
         if times:

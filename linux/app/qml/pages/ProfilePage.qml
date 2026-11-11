@@ -710,6 +710,17 @@ PageFrame {
                     }
                 }
             }
+
+            ExpanderItem {
+                header: qsTrId("Linux_Profile_AllowTearing.Header")
+                description: qsTrId("Linux_Profile_AllowTearing.Description")
+
+                Switch {
+                    objectName: "profileAllowTearing"
+                    checked: page.vm.isTearingAllowed
+                    onToggled: page.vm.isTearingAllowed = checked
+                }
+            }
         }
 
         SettingsCard {

@@ -27,8 +27,9 @@ public:
 	~Swapchain();
 
 	// Takes ownership of `surface`. The device must have been created for
-	// presentation. `presentMode` is used if the surface offers it, and
-	// VK_PRESENT_MODE_FIFO_KHR otherwise. The Windows version presents with
+	// presentation. `presentMode` is used if the surface offers it;
+	// otherwise VK_PRESENT_MODE_MAILBOX_KHR, and VK_PRESENT_MODE_FIFO_KHR
+	// if it lacks that as well. The Windows version presents with
 	// sync interval 0 on a flip swap chain, which shows the newest frame
 	// without tearing; VK_PRESENT_MODE_MAILBOX_KHR is the counterpart.
 	bool Initialize(VulkanDevice& device, VkSurfaceKHR surface, Size size, VkPresentModeKHR presentMode) noexcept;

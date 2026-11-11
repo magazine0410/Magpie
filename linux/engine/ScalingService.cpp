@@ -57,10 +57,11 @@ struct ScalingServiceDBus {
 		const char* workingDirectory = nullptr;
 		const char* profileName = nullptr;
 		int windowed = 0;
+		int tearing = 0;
 		int result = sd_bus_message_read_strv(message, &command);
 		if (result >= 0) {
-			result = sd_bus_message_read(message, "ssbii", &workingDirectory, &profileName, &windowed,
-				&request.size.width, &request.size.height);
+			result = sd_bus_message_read(message, "ssbiib", &workingDirectory, &profileName, &windowed,
+				&request.size.width, &request.size.height, &tearing);
 		}
 		if (command) {
 			for (char** argument = command; *argument; ++argument) {
@@ -75,6 +76,7 @@ struct ScalingServiceDBus {
 		request.workingDirectory = workingDirectory;
 		request.profileName = profileName;
 		request.windowedMode = windowed != 0;
+		request.allowsTearing = tearing != 0;
 		Service(userData).LaunchNested(std::move(request));
 		return sd_bus_reply_method_return(message, "");
 	}
@@ -169,7 +171,7 @@ struct ScalingServiceDBus {
 		// arguments, a working directory (or ""), the name of a profile (or
 		// ""), whether into a window, and the width and height the session
 		// offers the program (or 0 for those of the profile)
-		SD_BUS_METHOD("Launch", "asssbii", "", OnLaunch, SD_BUS_VTABLE_UNPRIVILEGED),
+		SD_BUS_METHOD("Launch", "asssbiib", "", OnLaunch, SD_BUS_VTABLE_UNPRIVILEGED),
 		// Shows the main window of the application; does nothing in a
 		// service without one
 		SD_BUS_METHOD("ShowWindow", "", "", OnShowWindow, SD_BUS_VTABLE_UNPRIVILEGED),
@@ -574,6 +576,7 @@ void ScalingService::_LaunchNested(const LaunchRequest& request) noexcept {
 		return;
 	}
 	_nestedProfileName = profile->name;
+	_nestedAllowsTearing = request.allowsTearing;
 	if (!_nested->Launch(request.command, request.workingDirectory)) {
 		_Report("The program could not be started in the nested session.");
 		_EndNested();
@@ -608,9 +611,17 @@ bool ScalingService::_StartNestedSession(bool windowedMode) noexcept {
 		options.overlayOptions.windowedModeScaleShortcut = _windowedScaleShortcut;
 		options.overlayOptions.takeScreenshotShortcut = _screenshotShortcut;
 
+		// Tearing is for a picture that covers a monitor: the desktop tears
+		// for no other window, and in a window it would gain nothing
+		const bool mayTear = !windowedMode && (_nestedAllowsTearing || profile->isTearingAllowed);
+		if (mayTear) {
+			Logger::Get().Info("The picture of the nested session may tear");
+		}
+
 		_session = std::make_unique<ScalingSession>();
 		error = _session->StartNested(*_nested, options, {
 			.effectsDir = _config.effectsDir,
+			.presentMode = mayTear ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR,
 			.validation = _config.validation,
 			.appId = _config.appId,
 			.iconFontPath = _config.iconFontPath,
@@ -651,6 +662,7 @@ void ScalingService::_EndNested() noexcept {
 		_nested.reset();
 	}
 	_nestedProfileName.clear();
+	_nestedAllowsTearing = false;
 	_windowId.clear();
 	_windowPid = 0;
 	_SetState(State::Idle);

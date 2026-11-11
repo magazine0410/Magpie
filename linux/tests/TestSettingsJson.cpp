@@ -367,7 +367,7 @@ TEST_CASE("A profile keeps how its program is started in a nested session", "[se
 	REQUIRE(ReadSettingsJson(R"({ "profiles": [
 		{},
 		{ "name": "Game", "packaged": false, "pathRule": "/usr/bin/game", "classNameRule": "game",
-			"launchNested": true, "nestedWidth": 800, "nestedHeight": 600 },
+			"launchNested": true, "nestedWidth": 800, "nestedHeight": 600, "allowTearing": true },
 		{ "name": "Other", "packaged": false, "pathRule": "/usr/bin/other", "classNameRule": "other" },
 		{ "name": "Wrong", "packaged": false, "pathRule": "/usr/bin/wrong", "classNameRule": "wrong",
 			"launchNested": true, "nestedWidth": 4, "nestedHeight": 600 }
@@ -376,10 +376,12 @@ TEST_CASE("A profile keeps how its program is started in a nested session", "[se
 	CHECK(settings.profiles[0].isLaunchedNested);
 	CHECK(settings.profiles[0].nestedWidth == 800);
 	CHECK(settings.profiles[0].nestedHeight == 600);
+	CHECK(settings.profiles[0].isTearingAllowed);
 	// Without them: as on Windows, and a size for when the user turns it on
 	CHECK_FALSE(settings.profiles[1].isLaunchedNested);
 	CHECK(settings.profiles[1].nestedWidth == 1280);
 	CHECK(settings.profiles[1].nestedHeight == 720);
+	CHECK_FALSE(settings.profiles[1].isTearingAllowed);
 	// A size that no session can have gives way to that default
 	CHECK(settings.profiles[2].isLaunchedNested);
 	CHECK(settings.profiles[2].nestedWidth == 1280);
@@ -394,4 +396,5 @@ TEST_CASE("A profile keeps how its program is started in a nested session", "[se
 	copy.Copy(settings.profiles[0]);
 	CHECK(copy.isLaunchedNested);
 	CHECK(copy.nestedWidth == 800);
+	CHECK(copy.isTearingAllowed);
 }

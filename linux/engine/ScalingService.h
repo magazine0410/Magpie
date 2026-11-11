@@ -70,6 +70,9 @@ public:
 		// What the session offers the program, which is the size the
 		// picture is scaled from; zero: that of the profile
 		Size size{};
+		// The picture may tear while it covers a monitor, whatever the
+		// profile says
+		bool allowsTearing = false;
 	};
 
 	// The ids of the shortcuts
@@ -207,6 +210,8 @@ private:
 	// scales its output
 	std::unique_ptr<NestedCompositor> _nested;
 	std::string _nestedProfileName;
+	// The request that started the nested session allowed tearing
+	bool _nestedAllowsTearing = false;
 	sd_bus* _bus = nullptr;
 	// The shortcuts come from the portal, or from the back end of a desktop
 	// whose portal has none; then _bridgeShortcuts has what was bound

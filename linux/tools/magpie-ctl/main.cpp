@@ -22,12 +22,15 @@ static void PrintUsage() {
 		"                   title, as magpie-viewer --list-windows prints them\n"
 		"  window [QUERY]   the same into a window that can be moved and resized\n"
 		"  stop             stop scaling; a nested session ends with its program\n"
-		"  launch [--windowed] [--profile NAME] [--size WxH] -- PROGRAM [ARGUMENT...]\n"
+		"  launch [--windowed] [--tearing] [--profile NAME] [--size WxH] -- PROGRAM [ARGUMENT...]\n"
 		"                   start a program in a nested session and scale it: it\n"
 		"                   runs in a compositor of Magpie's own, which works on\n"
 		"                   every desktop. --size is what the session offers the\n"
 		"                   program and what the picture is scaled from; without\n"
-		"                   it and without --profile it is 1280x720\n"
+		"                   it and without --profile it is 1280x720. With\n"
+		"                   --tearing a picture that covers a monitor is shown\n"
+		"                   without waiting for the monitor's refresh, if the\n"
+		"                   desktop permits that\n"
 		"  screenshot       save the scaled picture to the screenshots directory\n"
 		"  toolbar          the toolbar on the scaled picture: off, always shown,\n"
 		"                   shown when the pointer is near\n"
@@ -40,12 +43,14 @@ static void PrintUsage() {
 // "launch": the options up to "--", then the program and its arguments
 static int Launch(sd_bus* bus, int argc, char* argv[], sd_bus_error* error) {
 	const char* profile = "";
-	int windowed = 0, width = 0, height = 0;
+	int windowed = 0, width = 0, height = 0, tearing = 0;
 	int i = 2;
 	for (; i < argc && std::string_view(argv[i]) != "--"; ++i) {
 		const std::string_view option = argv[i];
 		if (option == "--windowed") {
 			windowed = 1;
+		} else if (option == "--tearing") {
+			tearing = 1;
 		} else if (option == "--profile" && i + 1 < argc) {
 			profile = argv[++i];
 		} else if (option == "--size" && i + 1 < argc) {
@@ -77,7 +82,7 @@ static int Launch(sd_bus* bus, int argc, char* argv[], sd_bus_error* error) {
 		result = sd_bus_message_append_strv(call, argv + i);
 	}
 	if (result >= 0) {
-		result = sd_bus_message_append(call, "ssbii", directory, profile, windowed, width, height);
+		result = sd_bus_message_append(call, "ssbiib", directory, profile, windowed, width, height, tearing);
 	}
 	if (result >= 0) {
 		result = sd_bus_call(bus, call, 0, error, nullptr);

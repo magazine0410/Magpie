@@ -440,7 +440,7 @@ static void WriteProfile(JsonWriter& writer, const Profile& profile) noexcept {
 		writer.Uint((uint32_t)profile.autoScale);
 		writer.Key("launchParameters");
 		writer.String(profile.launchParameters.c_str());
-		// Only the Linux version has and reads these three. They are left
+		// Only the Linux version has and reads these four. They are left
 		// out while they have their defaults, so that a configuration from
 		// Windows is written back as it was.
 		const Profile defaults;
@@ -453,6 +453,10 @@ static void WriteProfile(JsonWriter& writer, const Profile& profile) noexcept {
 			writer.Uint(profile.nestedWidth);
 			writer.Key("nestedHeight");
 			writer.Uint(profile.nestedHeight);
+		}
+		if (profile.isTearingAllowed) {
+			writer.Key("allowTearing");
+			writer.Bool(true);
 		}
 	}
 
@@ -569,6 +573,7 @@ static bool ReadProfile(
 		ReadBool(profileObj, "launchNested", profile.isLaunchedNested);
 		ReadUInt(profileObj, "nestedWidth", profile.nestedWidth);
 		ReadUInt(profileObj, "nestedHeight", profile.nestedHeight);
+		ReadBool(profileObj, "allowTearing", profile.isTearingAllowed);
 		if (profile.nestedWidth < 64 || profile.nestedWidth > 16384 ||
 			profile.nestedHeight < 64 || profile.nestedHeight > 16384) {
 			profile.nestedWidth = 1280;

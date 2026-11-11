@@ -56,4 +56,10 @@
   <data name="Linux_Profile_NestedSize.Description" xml:space="preserve">
     <value>The screen size the program is offered, in pixels, which is the size the picture is scaled from. A window that cannot be resized is scaled at its own size.</value>
   </data>
+  <data name="Linux_Profile_AllowTearing.Header" xml:space="preserve">
+    <value>Allow tearing</value>
+  </data>
+  <data name="Linux_Profile_AllowTearing.Description" xml:space="preserve">
+    <value>A nested session that covers a monitor shows each frame at once, without waiting for the monitor's refresh, where the desktop permits it. This shortens the delay and can show a break line in moving pictures.</value>
+  </data>
 </root>
