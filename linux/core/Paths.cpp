@@ -52,6 +52,30 @@ std::filesystem::path Paths::LogsDir() noexcept {
 	return StateDir() / "logs";
 }
 
+// <prefix>/share/magpie for a program in <prefix>/bin; empty if the program
+// is elsewhere
+static std::filesystem::path InstalledDataDir() noexcept {
+	std::error_code ec;
+	const std::filesystem::path program = std::filesystem::read_symlink("/proc/self/exe", ec);
+	if (ec) {
+		return {};
+	}
+	const std::filesystem::path dir = program.parent_path().parent_path() / "share" / APP_DIR;
+	return std::filesystem::is_directory(dir, ec) ? dir : std::filesystem::path();
+}
+
+std::filesystem::path Paths::EffectsDir(const std::filesystem::path& sourceTreeDir) noexcept {
+	const std::filesystem::path installed = InstalledDataDir();
+	return installed.empty() ? sourceTreeDir : installed / "effects";
+}
+
+std::filesystem::path Paths::IconFont(const std::filesystem::path& buildTreeFont) noexcept {
+	const std::filesystem::path installed = InstalledDataDir();
+	// Built without the font: there is none in the installation either
+	return installed.empty() || buildTreeFont.empty() ? buildTreeFont
+		: installed / "fonts" / buildTreeFont.filename();
+}
+
 std::filesystem::path Paths::SystemScreenshotsDir() noexcept {
 	const std::filesystem::path home = HomeDir();
 	std::filesystem::path pictures = home / "Pictures";

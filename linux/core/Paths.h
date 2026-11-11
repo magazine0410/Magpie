@@ -32,6 +32,15 @@ struct Paths {
 	// from a configuration made there means nothing here and also gives the
 	// system directory.
 	static std::filesystem::path ScreenshotsDir(const std::filesystem::path& configured) noexcept;
+
+	// The files that come with the program. Started from an installation
+	// (<prefix>/bin), it uses those below <prefix>/share/magpie: the
+	// directory "effects" and the file of the same name as `buildTreeFont`
+	// in "fonts". Started from a build tree, where there is no such
+	// directory, it uses the paths it is given, which are those of the
+	// source and build tree.
+	static std::filesystem::path EffectsDir(const std::filesystem::path& sourceTreeDir) noexcept;
+	static std::filesystem::path IconFont(const std::filesystem::path& buildTreeFont) noexcept;
 };
 
 }

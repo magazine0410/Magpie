@@ -128,12 +128,12 @@ int main(int argc, char* argv[]) {
 
 	ScalingOptions options;
 	ScalingSession::Config config;
-	config.effectsDir = MAGPIE_DEFAULT_EFFECTS_DIR;
+	config.effectsDir = Paths::EffectsDir(MAGPIE_DEFAULT_EFFECTS_DIR);
 	config.stateFile = Paths::StateDir() / "scaling-state";
 	// Unlike in a profile, where it is on by default
 	options.IsAdjustCursorSpeed(false);
 	config.appId = MAGPIE_APP_ID;
-	config.iconFontPath = MAGPIE_DEFAULT_ICON_FONT;
+	config.iconFontPath = Paths::IconFont(MAGPIE_DEFAULT_ICON_FONT);
 	config.showMessage = [](const std::string& text) {
 		std::printf("%s\n", text.c_str());
 		std::fflush(stdout);

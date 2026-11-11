@@ -7,3 +7,5 @@ target_compile_definitions(magpie-ctl PRIVATE
 	MAGPIE_APP_ID="${MAGPIE_APP_ID}"
 	MAGPIE_OBJECT_PATH="${MAGPIE_OBJECT_PATH}"
 )
+
+install(TARGETS magpie-ctl RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

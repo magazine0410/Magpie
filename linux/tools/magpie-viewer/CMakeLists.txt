@@ -7,3 +7,5 @@ target_compile_definitions(magpie-viewer PRIVATE
 )
 # See render/CMakeLists.txt
 target_compile_options(magpie-viewer PRIVATE -Wno-missing-field-initializers)
+
+install(TARGETS magpie-viewer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

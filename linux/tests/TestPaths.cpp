@@ -43,6 +43,13 @@ TEST_CASE("A relative or empty XDG value is ignored", "[Paths]") {
 	}
 }
 
+TEST_CASE("A program in a build tree uses the files of the source tree", "[Paths]") {
+	// The test program is not in <prefix>/bin with a <prefix>/share/magpie
+	CHECK(Paths::EffectsDir("/source/Effects") == "/source/Effects");
+	CHECK(Paths::IconFont("/build/_deps/font.ttf") == "/build/_deps/font.ttf");
+	CHECK(Paths::IconFont({}).empty());
+}
+
 TEST_CASE("MAGPIE_CONFIG_DIR replaces the configuration directory", "[Paths]") {
 	ScopedEnv config("XDG_CONFIG_HOME", "/xdg/config");
 	ScopedEnv portable("MAGPIE_CONFIG_DIR", "/media/stick/magpie-config");

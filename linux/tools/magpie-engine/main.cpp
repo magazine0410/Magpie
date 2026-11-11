@@ -16,6 +16,7 @@
 #include <sys/signalfd.h>
 #include <spdlog/sinks/stdout_sinks.h>
 #include "Logger.h"
+#include "Paths.h"
 #include "ScalingService.h"
 #include "SettingsJson.h"
 #include "SettingsStore.h"
@@ -55,8 +56,8 @@ int main(int argc, char* argv[]) {
 	sigprocmask(SIG_BLOCK, &signals, nullptr);
 
 	ScalingService::Config config{
-		.effectsDir = MAGPIE_DEFAULT_EFFECTS_DIR,
-		.iconFontPath = MAGPIE_DEFAULT_ICON_FONT,
+		.effectsDir = Paths::EffectsDir(MAGPIE_DEFAULT_EFFECTS_DIR),
+		.iconFontPath = Paths::IconFont(MAGPIE_DEFAULT_ICON_FONT),
 		.appId = MAGPIE_APP_ID,
 		.objectPath = MAGPIE_OBJECT_PATH,
 		.quitFd = signalfd(-1, &signals, SFD_NONBLOCK | SFD_CLOEXEC)

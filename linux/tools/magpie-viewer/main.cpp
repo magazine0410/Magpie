@@ -226,7 +226,7 @@ static float Milliseconds(steady_clock::duration duration) {
 
 int main(int argc, char* argv[]) {
 	ScalingOptions options;
-	std::filesystem::path effectsDir = MAGPIE_DEFAULT_EFFECTS_DIR;
+	std::filesystem::path effectsDir = Paths::EffectsDir(MAGPIE_DEFAULT_EFFECTS_DIR);
 	const char* configFile = nullptr;
 	const char* modeName = nullptr;
 	std::string windowQuery;

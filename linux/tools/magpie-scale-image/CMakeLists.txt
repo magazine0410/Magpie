@@ -4,3 +4,5 @@ target_link_libraries(magpie-scale-image PRIVATE magpie_render magpie_tools_comm
 target_compile_definitions(magpie-scale-image PRIVATE
 	MAGPIE_DEFAULT_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"
 )
+
+install(TARGETS magpie-scale-image RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

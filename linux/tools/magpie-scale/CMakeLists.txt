@@ -7,3 +7,5 @@ target_compile_definitions(magpie-scale PRIVATE
 )
 # See render/CMakeLists.txt
 target_compile_options(magpie-scale PRIVATE -Wno-missing-field-initializers)
+
+install(TARGETS magpie-scale RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

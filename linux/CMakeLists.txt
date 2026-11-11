@@ -11,6 +11,15 @@ if(NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
+# Installation ("cmake --install"): the programs go to bin, the effects and
+# the icon font to share/magpie, where the installed programs look for them
+# (Paths::EffectsDir), and the shader compiler's library to a directory of
+# Magpie's own, which the installed programs name as their library path.
+include(GNUInstallDirs)
+set(MAGPIE_INSTALL_DATADIR "${CMAKE_INSTALL_DATADIR}/magpie")
+set(MAGPIE_INSTALL_LIBDIR "${CMAKE_INSTALL_LIBDIR}/magpie")
+set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${MAGPIE_INSTALL_LIBDIR}")
+
 # The effects shared with the Windows build
 set(MAGPIE_EFFECTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../src/Effects")
 
@@ -54,6 +63,20 @@ add_subdirectory(tools/magpie-ctl)
 option(MAGPIE_BUILD_APP "Build the settings application" ON)
 if(MAGPIE_BUILD_APP)
 	add_subdirectory(app)
+endif()
+
+install(DIRECTORY "${MAGPIE_EFFECTS_DIR}/"
+	DESTINATION "${MAGPIE_INSTALL_DATADIR}/effects"
+	FILES_MATCHING PATTERN "*.hlsl" PATTERN "*.hlsli" PATTERN "*.dds"
+)
+if(MAGPIE_ICON_FONT)
+	install(FILES "${MAGPIE_ICON_FONT}" DESTINATION "${MAGPIE_INSTALL_DATADIR}/fonts")
+endif()
+# No distribution packages the DirectX Shader Compiler, so its library is
+# installed with Magpie unless it comes from the system's own directories
+option(MAGPIE_INSTALL_DXC "Install the library of the DirectX Shader Compiler with Magpie" ON)
+if(MAGPIE_INSTALL_DXC)
+	install(FILES "${DXC_LIBRARY}" DESTINATION "${MAGPIE_INSTALL_LIBDIR}")
 endif()
 
 include(CTest)

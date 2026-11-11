@@ -9,9 +9,10 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(MAGPIE_VERSION_STRING "dev" CACHE STRING "Version shown to the user")
 set(MAGPIE_REPOSITORY_URL "https://github.com/magazine0410/Magpie" CACHE STRING
 	"Where bug reports and requests go")
-set(MAGPIE_COMMIT_ID "")
+# Given by a build that is not made in a git checkout, such as a package's
+set(MAGPIE_COMMIT_ID "" CACHE STRING "Commit shown to the user")
 find_package(Git QUIET)
-if(Git_FOUND)
+if(NOT MAGPIE_COMMIT_ID AND Git_FOUND)
 	execute_process(
 		COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
 		WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -142,3 +143,21 @@ file(GENERATE
 	OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${MAGPIE_APP_ID}.desktop"
 	INPUT "${CMAKE_CURRENT_SOURCE_DIR}/../data/magpie.desktop.in"
 )
+
+# The installed program: the same .desktop file with the installed
+# executable and the icon by its name, the icon, and the description for
+# software centres
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../data/magpie.desktop.in" desktop_file)
+string(REPLACE "$<TARGET_FILE:magpie>" "${CMAKE_INSTALL_FULL_BINDIR}/magpie" desktop_file "${desktop_file}")
+string(REPLACE "$<TARGET_PROPERTY:magpie,MAGPIE_ICON_FILE>" "${MAGPIE_APP_ID}" desktop_file "${desktop_file}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/installed/${MAGPIE_APP_ID}.desktop" "${desktop_file}")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../data/magpie.metainfo.xml.in"
+	"${CMAKE_CURRENT_BINARY_DIR}/installed/${MAGPIE_APP_ID}.metainfo.xml" @ONLY)
+
+install(TARGETS magpie RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/installed/${MAGPIE_APP_ID}.desktop"
+	DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+install(FILES "${ICON_FILE}"
+	DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps" RENAME "${MAGPIE_APP_ID}.svg")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/installed/${MAGPIE_APP_ID}.metainfo.xml"
+	DESTINATION "${CMAKE_INSTALL_DATADIR}/metainfo")

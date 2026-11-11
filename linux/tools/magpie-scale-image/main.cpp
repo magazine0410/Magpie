@@ -9,6 +9,7 @@
 #include <spdlog/sinks/stdout_sinks.h>
 #include "ImageScaler.h"
 #include "Logger.h"
+#include "Paths.h"
 #include "ToolOptions.h"
 #include "VulkanDevice.h"
 
@@ -81,7 +82,7 @@ static int ListGpus() {
 
 int main(int argc, char* argv[]) {
 	ImageScaler::Request request;
-	request.config.effectsDir = MAGPIE_DEFAULT_EFFECTS_DIR;
+	request.config.effectsDir = Paths::EffectsDir(MAGPIE_DEFAULT_EFFECTS_DIR);
 
 	const char* configFile = nullptr;
 	const char* modeName = nullptr;

@@ -8,3 +8,5 @@ target_compile_definitions(magpie-engine PRIVATE
 )
 # See render/CMakeLists.txt
 target_compile_options(magpie-engine PRIVATE -Wno-missing-field-initializers)
+
+install(TARGETS magpie-engine RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

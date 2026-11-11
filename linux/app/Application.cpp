@@ -10,6 +10,7 @@
 #include <QSystemTrayIcon>
 #include "Localization.h"
 #include "Logger.h"
+#include "Paths.h"
 #include "MainWindow.h"
 #include "ScalingController.h"
 #include "SettingsStore.h"
@@ -54,7 +55,7 @@ bool Application::Initialize(const Options& options) {
 	ApplyTheme();
 
 	// Read in the background; the scaling modes page needs them first
-	_effects.Initialize(MAGPIE_DEFAULT_EFFECTS_DIR);
+	_effects.Initialize(Paths::EffectsDir(MAGPIE_DEFAULT_EFFECTS_DIR));
 
 	_graphicsCardsFuture = std::async(std::launch::async, [] {
 		std::vector<GraphicsCardEntry> cards;
@@ -75,8 +76,8 @@ bool Application::Initialize(const Options& options) {
 	connect(_scaling.get(), &ScalingController::ShowWindowRequested, this, &Application::ShowMainWindow);
 	if (options.startEngine) {
 		_scaling->Start({
-			.effectsDir = MAGPIE_DEFAULT_EFFECTS_DIR,
-			.iconFontPath = MAGPIE_DEFAULT_ICON_FONT,
+			.effectsDir = Paths::EffectsDir(MAGPIE_DEFAULT_EFFECTS_DIR),
+			.iconFontPath = Paths::IconFont(MAGPIE_DEFAULT_ICON_FONT),
 			.appId = MAGPIE_APP_ID,
 			.objectPath = MAGPIE_OBJECT_PATH
 		});
