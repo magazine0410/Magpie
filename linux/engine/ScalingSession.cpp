@@ -8,7 +8,6 @@
 #include <poll.h>
 #include <unistd.h>
 #include <fmt/format.h>
-#include "KWinBridge.h"
 #include "Logger.h"
 #include "ProcessInfo.h"
 #include "ScalingGeometry.h"
@@ -65,25 +64,31 @@ void ScalingSession::_WriteStateFile() const noexcept {
 		// Its place is that of a maximized or fullscreen window on this monitor
 		file << "output " << _monitors[0].name << '\n';
 	}
-	for (const KWinPointerSpeed::Device& device : _pointerDevices) {
-		file << "pointer " << device.sysName << ' ' << device.acceleration << '\n';
+	if (!_original.restoreData.empty()) {
+		file << "restore " << _original.restoreData << '\n';
+	}
+	if (!_virtualOutputName.empty()) {
+		file << "virtualOutput " << _virtualOutputName << '\n';
+	}
+	for (const PointerDevice& device : _pointerDevices) {
+		file << "pointer " << device.id << ' ' << device.acceleration << '\n';
 	}
 	if (!file) {
 		Logger::Get().Warn(fmt::format("The state file {} could not be written", _config.stateFile.string()));
 	}
 }
 
-void ScalingSession::RecoverAfterCrash(KWinBridge& bridge, const std::filesystem::path& stateFile) noexcept {
+void ScalingSession::RecoverAfterCrash(DesktopBridge& bridge, const std::filesystem::path& stateFile) noexcept {
 	std::ifstream file(stateFile);
 	if (!file) {
 		return;
 	}
 
-	std::string header, windowId, output;
+	std::string header, windowId, output, restore, virtualOutput;
 	Rect frame;
 	int noBorder = 0;
 	bool hasWindow = false, hasFrame = false;
-	std::vector<KWinPointerSpeed::Device> pointerDevices;
+	std::vector<PointerDevice> pointerDevices;
 
 	std::getline(file, header);
 	if (header == STATE_FILE_HEADER) {
@@ -100,9 +105,14 @@ void ScalingSession::RecoverAfterCrash(KWinBridge& bridge, const std::filesystem
 				stream >> noBorder;
 			} else if (key == "output") {
 				stream >> output;
+			} else if (key == "restore") {
+				// The rest of the line, without the space after the key
+				std::getline(stream >> std::ws, restore);
+			} else if (key == "virtualOutput") {
+				stream >> virtualOutput;
 			} else if (key == "pointer") {
-				KWinPointerSpeed::Device device;
-				if (stream >> device.sysName >> device.acceleration) {
+				PointerDevice device;
+				if (stream >> device.id >> device.acceleration) {
 					pointerDevices.push_back(std::move(device));
 				}
 			}
@@ -118,15 +128,19 @@ void ScalingSession::RecoverAfterCrash(KWinBridge& bridge, const std::filesystem
 			bridge.PlaceWindow(windowId, {
 				.frameRect = output.empty() ? frame : Rect{},
 				.noBorder = noBorder != 0,
-				.output = output
+				.output = output,
+				.restore = restore
 			});
 		}
+	}
+	if (!virtualOutput.empty()) {
+		bridge.RemoveStaleVirtualOutput(virtualOutput);
 	}
 	if (!pointerDevices.empty()) {
 		// Whether they were changed when the program ended is not known;
 		// setting them again does no harm
 		Logger::Get().Warn("Scaling did not end properly last time; restoring the pointer speed");
-		KWinPointerSpeed::Apply(pointerDevices);
+		bridge.ApplyPointerSpeed(pointerDevices);
 	}
 
 	std::error_code ec;
@@ -134,21 +148,21 @@ void ScalingSession::RecoverAfterCrash(KWinBridge& bridge, const std::filesystem
 }
 
 ScalingError ScalingSession::Start(
-	KWinBridge& bridge,
+	DesktopBridge& bridge,
 	const std::string& windowId,
 	const ScalingOptions& options,
 	const Config& config
 ) noexcept {
 	_bridge = &bridge;
+	_traits = bridge.GetTraits();
 	_options = options;
 	_config = config;
 	_windowId = windowId;
 	// Debug mode of the Windows version also turns on the debug layer
 	_config.validation = config.validation || options.IsDebugMode();
 
-	if (bridge.WindowManagementVersion() == 0 || bridge.ScreencastVersion() == 0 || !bridge.HasFakeInput()) {
-		Logger::Get().Error("The desktop lacks an interface that scaling needs "
-			"(window list, virtual outputs or pointer movement)");
+	if (const std::string missing = bridge.MissingForScaling(); !missing.empty()) {
+		Logger::Get().Error("The desktop lacks what scaling needs: " + missing);
 		return ScalingError::ScalingFailedGeneral;
 	}
 	if (options.effects.empty()) {
@@ -187,15 +201,13 @@ ScalingError ScalingSession::Start(
 	cropping.Right += (float)(_ringRight + _padRight);
 	cropping.Bottom += (float)_ringBottom;
 
-	_frameSource = std::make_unique<PipeWireFrameSource>();
-	if (!_frameSource->Initialize(_device, {
-		.pipeWireFd = _capture->PipeWireFd(),
-		.nodeId = _capture->NodeId(),
+	_frameSource = FrameSource::Create(_device, *_capture, {
 		.fixedSize = { _virtualOutputRect.Width(), _virtualOutputRect.Height() },
 		.cropping = cropping,
 		.duplicateFrameDetectionMode = _options.duplicateFrameDetectionMode,
 		.isStatisticsForDynamicDetectionEnabled = _options.IsStatisticsForDynamicDetectionEnabled()
-	}) || !_WaitForFirstFrame()) {
+	});
+	if (!_frameSource || !_WaitForFirstFrame()) {
 		return fail(ScalingError::CaptureFailed);
 	}
 
@@ -216,7 +228,7 @@ ScalingError ScalingSession::Start(
 		_overlay = std::make_unique<OverlayDrawer>();
 		if (_overlay->Initialize(_device, _views[0].swapchain->Format(), {
 			.iconFontPath = config.iconFontPath,
-			.captureMethod = "Virtual output (PipeWire)",
+			.captureMethod = _traits.captureMethod,
 			.isWindowedMode = _options.IsWindowedMode(),
 			.isDeveloperMode = _options.IsDeveloperMode(),
 			.showDynamicDetectionStatistics = _options.IsStatisticsForDynamicDetectionEnabled() &&
@@ -331,7 +343,7 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 		.isWindowedMode = _options.IsWindowedMode(),
 		.is3DGameMode = _options.Is3DGameMode(),
 		.multiMonitorUsage = _options.multiMonitorUsage
-	}, _bridge->ListOutputs(), plan)) {
+	}, _bridge->ListOutputs(), plan, _traits.customModeWidthStep)) {
 		Logger::Get().Error("The window is not on a monitor, or the monitors leave no room for the virtual output");
 		error = ScalingError::InvalidSourceWindow;
 		return false;
@@ -352,7 +364,7 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 
 	// Not in debug mode, as on Windows
 	if (_options.IsAdjustCursorSpeed() && !_options.IsDebugMode()) {
-		_pointerDevices = KWinPointerSpeed::ReadDevices();
+		_pointerDevices = _bridge->ReadPointerDevices();
 	}
 
 	// Noted before the desktop is changed, so that a crash can be undone
@@ -362,6 +374,8 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 	if (!_capture) {
 		return false;
 	}
+	// Once more, now with the name of the output
+	_WriteStateFile();
 	_virtualOutputRect = { position.x, position.y, position.x + outputSize.width, position.y + outputSize.height };
 	// The refresh rate of the monitor, so that the source is not held to the
 	// 60 Hz a new virtual output has
@@ -393,7 +407,8 @@ bool ScalingSession::_PrepareDesktop(ScalingError& error) noexcept {
 bool ScalingSession::PlanVirtualOutput(
 	const PlanRequest& request,
 	std::span<const OutputInfo> outputs,
-	VirtualOutputPlan& plan
+	VirtualOutputPlan& plan,
+	int32_t widthStep
 ) noexcept {
 	plan = {};
 
@@ -403,7 +418,7 @@ bool ScalingSession::PlanVirtualOutput(
 	const OutputInfo* home = nullptr;
 	Rect bounds{ INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN };
 	for (const OutputInfo& output : outputs) {
-		if (output.name.starts_with("Virtual-")) {
+		if (output.isVirtual) {
 			continue;
 		}
 		bounds = Union(bounds, output.rect);
@@ -421,7 +436,7 @@ bool ScalingSession::PlanVirtualOutput(
 	plan.rendererRect = home->rect;
 	plan.refreshRate = home->refreshRate;
 	for (const OutputInfo& output : outputs) {
-		if (output.name.starts_with("Virtual-") || &output == home) {
+		if (output.isVirtual || &output == home) {
 			continue;
 		}
 
@@ -463,9 +478,12 @@ bool ScalingSession::PlanVirtualOutput(
 		}
 	}
 
-	// A mode with another refresh rate than 60 Hz has to be computed, and the
-	// formula for that only yields widths that are multiples of 8
-	const bool needsCustomMode = plan.refreshRate > DEFAULT_REFRESH_RATE;
+	// A mode with another refresh rate than 60 Hz has to be computed, and on
+	// some desktops the formula for that only yields certain widths
+	const bool needsCustomMode = plan.refreshRate > DEFAULT_REFRESH_RATE && widthStep > 1;
+	const auto padding = [&](int32_t width) {
+		return needsCustomMode ? (widthStep - width % widthStep) % widthStep : 0;
+	};
 	const Size sourceSize = request.sourceSize;
 
 	if (request.fillsOutput) {
@@ -473,9 +491,7 @@ bool ScalingSession::PlanVirtualOutput(
 		// strip around it; its outermost pixels serve as the strip. A width
 		// that is rounded up makes the window that much wider.
 		plan.size = sourceSize;
-		if (needsCustomMode) {
-			plan.size.width += (8 - plan.size.width % 8) % 8;
-		}
+		plan.size.width += padding(plan.size.width);
 		plan.sourceRect = { 0, 0, plan.size.width, plan.size.height };
 		plan.pointerRect = {
 			plan.exitLeft ? RING : 0, plan.exitTop ? RING : 0,
@@ -492,10 +508,8 @@ bool ScalingSession::PlanVirtualOutput(
 			sourceSize.height + plan.ringTop + plan.ringBottom
 		};
 		// The columns added on the right are cut off like the strips
-		if (needsCustomMode) {
-			plan.padRight = (8 - plan.size.width % 8) % 8;
-			plan.size.width += plan.padRight;
-		}
+		plan.padRight = padding(plan.size.width);
+		plan.size.width += plan.padRight;
 		plan.sourceRect = {
 			plan.ringLeft, plan.ringTop, plan.ringLeft + sourceSize.width, plan.ringTop + sourceSize.height
 		};
@@ -1216,7 +1230,7 @@ void ScalingSession::_SetPointerSlowed(bool slowed, const Rect& destRect) noexce
 	_isPointerSlowed = slowed;
 
 	if (!slowed) {
-		KWinPointerSpeed::Apply(_pointerDevices);
+		_bridge->ApplyPointerSpeed(_pointerDevices);
 		return;
 	}
 
@@ -1227,11 +1241,11 @@ void ScalingSession::_SetPointerSlowed(bool slowed, const Rect& destRect) noexce
 	const double scale = ((double)destRect.Width() / srcRect.Width() +
 		(double)destRect.Height() / srcRect.Height()) / 2;
 
-	std::vector<KWinPointerSpeed::Device> devices = _pointerDevices;
-	for (KWinPointerSpeed::Device& device : devices) {
-		device.acceleration = KWinPointerSpeed::Slowed(device.acceleration, scale);
+	std::vector<PointerDevice> devices = _pointerDevices;
+	for (PointerDevice& device : devices) {
+		device.acceleration = PointerDevice::Slowed(device.acceleration, scale);
 	}
-	KWinPointerSpeed::Apply(devices);
+	_bridge->ApplyPointerSpeed(devices);
 }
 
 bool ScalingSession::_Render(bool runEffects) noexcept {
@@ -1392,11 +1406,11 @@ void ScalingSession::Stop() noexcept {
 
 	if (_isPointerSlowed) {
 		_isPointerSlowed = false;
-		KWinPointerSpeed::Apply(_pointerDevices);
+		_bridge->ApplyPointerSpeed(_pointerDevices);
 	}
 
 	// Set if the window has another size than before scaling
-	std::optional<KWinBridge::Placement> placeAgain;
+	std::optional<WindowPlacement> placeAgain;
 
 	// The window goes back while the picture still covers the monitor, and
 	// before its output disappears
@@ -1404,7 +1418,11 @@ void ScalingSession::Stop() noexcept {
 		_bridge->ListWindows();
 		WindowInfo info;
 		if (_bridge->GetWindow(_windowId, info)) {
-			KWinBridge::Placement placement{ .noBorder = _original.hasNoBorder, .activate = info.isActive };
+			WindowPlacement placement{
+				.noBorder = _original.hasNoBorder,
+				.activate = info.isActive,
+				.restore = _original.restoreData
+			};
 			if (info.isFullscreen || info.isMaximized || _isSourceFilling) {
 				// The desktop decides the place of such a window on its
 				// monitor. That place is known if the window is in the state

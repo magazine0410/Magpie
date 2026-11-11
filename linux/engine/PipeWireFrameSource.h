@@ -1,20 +1,9 @@
-// Frames and cursor of a screen cast, received as a PipeWire stream. This is
-// the Linux frame source for every strategy that captures: the portal, KWin
-// and the other compositors all hand out a PipeWire node. It takes the place
-// of the four frame sources in src/Magpie.Core and of FrameSourceBase, whose
-// Update it follows.
-//
-// Everything runs on the thread that calls Dispatch and Update. That thread
-// waits on EventFd.
+// Frames and cursor of a screen cast, received as a PipeWire stream: the
+// frame source for the portal and for KWin, which hand out a PipeWire node.
+// Its Update follows FrameSourceBase::Update in src/Magpie.Core.
 #pragma once
-#include <chrono>
-#include <cstdint>
-#include <memory>
-#include <string>
 #include <unordered_map>
-#include <vector>
-#include "Geometry.h"
-#include "ScalingOptions.h"
+#include "FrameSource.h"
 
 struct pw_buffer;
 struct pw_context;
@@ -26,34 +15,9 @@ struct spa_pod;
 namespace Magpie {
 
 struct Buffer;
-struct Texture;
 class DuplicateFrameDetector;
-class VulkanDevice;
 
-enum class FrameSourceState {
-	NewFrame,
-	Waiting,
-	Error
-};
-
-// What the stream says about the cursor. The position is that of the hot
-// spot, in pixels of the stream's picture.
-struct CaptureCursorState {
-	bool isVisible = false;
-	Point pos;
-	// Changes whenever a new image arrives
-	uint32_t imageSerial = 0;
-};
-
-struct CaptureCursorImage {
-	// Four bytes per pixel in the order red, green, blue, alpha, with the
-	// colours multiplied by alpha, without padding between the rows
-	std::vector<uint8_t> pixels;
-	Size size;
-	Point hotSpot;
-};
-
-class PipeWireFrameSource {
+class PipeWireFrameSource final : public FrameSource {
 public:
 	struct Options {
 		// Connection to the PipeWire daemon that has the node, as the portal
@@ -96,46 +60,33 @@ public:
 	PipeWireFrameSource(const PipeWireFrameSource&) = delete;
 	PipeWireFrameSource(PipeWireFrameSource&&) = delete;
 
-	// No GPU work that uses Output may be pending
-	~PipeWireFrameSource();
+	~PipeWireFrameSource() override;
 
 	bool Initialize(VulkanDevice& device, const Options& options) noexcept;
 
-	// Readable when Dispatch has something to do
-	int EventFd() const noexcept;
+	int EventFd() const noexcept override;
 
-	// Processes what the stream has sent: frames, cursor updates, changes of
-	// format. Does no GPU work. Returns false when the stream has ended or
-	// failed.
-	bool Dispatch() noexcept;
+	bool Dispatch() noexcept override;
 
-	// Makes the newest frame that Dispatch has received the output. NewFrame:
-	// Output has new content. Waiting: there is no frame, or it equals the
-	// previous one. The call submits GPU work and waits for it.
-	FrameSourceState Update() noexcept;
+	FrameSourceState Update() noexcept override;
 
-	// The current frame, in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; null
-	// before the first NewFrame. When the source changes its size or format,
-	// this becomes another texture.
-	const std::shared_ptr<Texture>& Output() const noexcept {
+	const std::shared_ptr<Texture>& Output() const noexcept override {
 		return _output;
 	}
 
-	// The part of the stream's picture that Output holds, in stream pixels
-	const Rect& SrcRect() const noexcept {
+	const Rect& SrcRect() const noexcept override {
 		return _srcRect;
 	}
 
-	const CaptureCursorState& CursorState() const noexcept {
+	const CaptureCursorState& CursorState() const noexcept override {
 		return _cursorState;
 	}
 
-	const CaptureCursorImage& CursorImage() const noexcept {
+	const CaptureCursorImage& CursorImage() const noexcept override {
 		return _cursorImage;
 	}
 
-	// When the frame that the last Update took had arrived
-	std::chrono::steady_clock::time_point LastFrameArrivalTime() const noexcept {
+	std::chrono::steady_clock::time_point LastFrameArrivalTime() const noexcept override {
 		return _outputArrivalTime;
 	}
 
@@ -143,11 +94,9 @@ public:
 		return _statistics;
 	}
 
-	// For example "BGRx 640x480, DMA-BUF with modifier 0x300000000606014"
-	std::string DescribeFormat() const noexcept;
+	std::string DescribeFormat() const noexcept override;
 
-	// (frames wrongly taken as new, frames not compared), see DuplicateFrameDetector
-	std::pair<uint32_t, uint32_t> GetStatisticsForDynamicDetection() const noexcept;
+	std::pair<uint32_t, uint32_t> GetStatisticsForDynamicDetection() const noexcept override;
 
 private:
 	// The negotiated format, and PipeWire's listener structures together with

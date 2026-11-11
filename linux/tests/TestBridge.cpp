@@ -51,16 +51,16 @@ TEST_CASE("Every capability has a name", "[bridge]") {
 
 TEST_CASE("The pointer speed setting for a scaled picture", "[bridge]") {
 	// With the flat profile the speed is 1 + setting
-	CHECK(KWinPointerSpeed::Slowed(0.0, 2.0) == -0.5);
-	CHECK(KWinPointerSpeed::Slowed(0.0, 2.25) == 1.0 / 2.25 - 1.0);
-	CHECK(KWinPointerSpeed::Slowed(0.5, 3.0) == -0.5);
-	CHECK(KWinPointerSpeed::Slowed(-0.5, 2.0) == -0.75);
+	CHECK(PointerDevice::Slowed(0.0, 2.0) == -0.5);
+	CHECK(PointerDevice::Slowed(0.0, 2.25) == 1.0 / 2.25 - 1.0);
+	CHECK(PointerDevice::Slowed(0.5, 3.0) == -0.5);
+	CHECK(PointerDevice::Slowed(-0.5, 2.0) == -0.75);
 	// A picture of the source's size changes nothing
-	CHECK(KWinPointerSpeed::Slowed(0.25, 1.0) == 0.25);
+	CHECK(PointerDevice::Slowed(0.25, 1.0) == 0.25);
 	// A smaller picture makes the pointer faster, up to the limit of the setting
-	CHECK(KWinPointerSpeed::Slowed(0.0, 0.8) == 0.25);
-	CHECK(KWinPointerSpeed::Slowed(0.5, 0.5) == 1.0);
-	CHECK(KWinPointerSpeed::Slowed(0.25, 0.0) == 0.25);
+	CHECK(PointerDevice::Slowed(0.0, 0.8) == 0.25);
+	CHECK(PointerDevice::Slowed(0.5, 0.5) == 1.0);
+	CHECK(PointerDevice::Slowed(0.25, 0.0) == 0.25);
 }
 
 TEST_CASE("The mode of a virtual output is chosen from the modes it has", "[bridge]") {

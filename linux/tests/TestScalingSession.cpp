@@ -81,7 +81,7 @@ TEST_CASE("The virtual output is planned from the window and the monitors", "[se
 
 	SECTION("an existing virtual output is not a monitor") {
 		std::vector<OutputInfo> outputs = THREE_IN_A_ROW;
-		outputs.push_back({ "Virtual-Magpie", { 0, 17464, 648, 17944 }, 200'000 });
+		outputs.push_back({ "Virtual-Magpie", { 0, 17464, 648, 17944 }, 200'000, true });
 		REQUIRE(ScalingSession::PlanVirtualOutput({ .frameRect = { 4480, 264, 5120, 772 }, .sourceSize = { 640, 480 } }, outputs, plan));
 		CHECK(plan.otherMonitors.size() == 2);
 		CHECK(plan.position == Point{ 0, 1080 + 16384 });

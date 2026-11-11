@@ -59,6 +59,23 @@ CapabilityReport ProbeCapabilities() noexcept {
 	return report;
 }
 
+double PointerDevice::Slowed(double acceleration, double scale) noexcept {
+	if (scale <= 0.0) {
+		return acceleration;
+	}
+	return std::clamp((1.0 + acceleration) / scale - 1.0, -1.0, 1.0);
+}
+
+std::unique_ptr<DesktopBridge> DesktopBridge::Create(std::string& error) noexcept {
+	auto kwin = std::make_unique<KWinBridge>();
+	if (kwin->Initialize()) {
+		return kwin;
+	}
+
+	error = "This desktop has no back end for scaling windows that are open already.";
+	return nullptr;
+}
+
 static bool EqualsIgnoringCase(std::string_view a, std::string_view b) noexcept {
 	return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](char x, char y) {
 		return std::tolower((unsigned char)x) == std::tolower((unsigned char)y);

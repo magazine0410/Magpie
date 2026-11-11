@@ -1,14 +1,11 @@
 // What the engine asks of the desktop it runs on. The scaling code never
 // talks to a compositor or a portal itself; it uses the types below, and a
-// back end per desktop provides them (KWinBridge, PortalCapture).
-//
-// Only the capabilities that have an implementation have an interface here:
-// finding windows and capturing them. The others get theirs together with
-// their first back end.
+// back end per desktop provides them (KWinBridge, SwayBridge, PortalCapture).
 #pragma once
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,6 +71,10 @@ struct WindowInfo {
 	bool isFullscreen = false;
 	// The desktop draws no title bar and border around it
 	bool hasNoBorder = false;
+	// What the back end needs besides frameRect and hasNoBorder to give the
+	// window its place back, in a form only it understands: one line of
+	// text, empty if there is nothing. It goes into WindowPlacement::restore.
+	std::string restoreData;
 };
 
 struct OutputInfo {
@@ -82,6 +83,51 @@ struct OutputInfo {
 	Rect rect;
 	// In thousandths of a hertz
 	int32_t refreshRate = 0;
+	// No monitor shows it
+	bool isVirtual = false;
+};
+
+// Where DesktopBridge::PlaceWindow puts a window
+struct WindowPlacement {
+	// With decoration, in desktop coordinates
+	Rect frameRect;
+	bool noBorder = false;
+	// Also make it the active window
+	bool activate = false;
+	// False: only the decoration and the activation are changed, for a
+	// window whose place the desktop decides (maximized, fullscreen)
+	bool setGeometry = true;
+	// Not empty: the window is sent to this output and keeps its state,
+	// for a maximized or fullscreen window. frameRect is then where it
+	// is expected to end up, or empty if that is not known.
+	std::string output;
+	// Not empty: the window gets back what WindowInfo::restoreData described
+	std::string restore;
+};
+
+// What else can be set on a window. What has no value is left alone.
+struct WindowProperties {
+	// The desktop keeps the window above the ordinary ones
+	std::optional<bool> keepAbove;
+	std::optional<bool> minimized;
+	// Not in the task bar, the window switcher and the pager
+	std::optional<bool> skipTaskbar;
+	// Put above the other windows once
+	bool raise = false;
+};
+
+// A pointer device whose speed can be set
+struct PointerDevice {
+	// What the back end knows the device by; without spaces
+	std::string id;
+	// The acceleration setting of libinput, from -1 to 1
+	double acceleration = 0.0;
+
+	// The setting that makes a device `scale` times slower than `acceleration`
+	// does. With the flat profile the speed is 1 + acceleration, so this is
+	// exact; with the adaptive profile, where the setting shapes a curve, it
+	// only goes in the right direction. The result stays within -1 to 1.
+	static double Slowed(double acceleration, double scale) noexcept;
 };
 
 // The windows that `query` describes: the one with this id; otherwise those
@@ -89,17 +135,44 @@ struct OutputInfo {
 // those with a title that contains it.
 std::vector<const WindowInfo*> FindWindows(std::span<const WindowInfo> windows, std::string_view query) noexcept;
 
-// A running screen cast: where its PipeWire stream is, and how to learn that
-// it has ended. Destroying the object ends the screen cast.
+// A running screen cast: where its frames come from, and how to learn that
+// it has ended. Destroying the object ends the screen cast, and removes the
+// virtual output if it was made together with one.
 class CaptureSession {
 public:
+	enum class Kind {
+		// A PipeWire stream: PipeWireFd and NodeId say where
+		PipeWire,
+		// An output of a Wayland compositor that is copied with the protocol
+		// ext-image-copy-capture: WaylandDisplay and OutputName say which
+		ImageCopy
+	};
+
 	virtual ~CaptureSession() = default;
+
+	virtual Kind GetKind() const noexcept {
+		return Kind::PipeWire;
+	}
 
 	// The connection to the PipeWire daemon that has the node, or -1 for the
 	// session's own daemon. It stays owned by this object.
-	virtual int PipeWireFd() const noexcept = 0;
+	virtual int PipeWireFd() const noexcept {
+		return -1;
+	}
 
-	virtual uint32_t NodeId() const noexcept = 0;
+	virtual uint32_t NodeId() const noexcept {
+		return 0;
+	}
+
+	// The name of the compositor's socket, as in WAYLAND_DISPLAY; empty for
+	// the one of the session
+	virtual std::string WaylandDisplay() const noexcept {
+		return {};
+	}
+
+	virtual std::string OutputName() const noexcept {
+		return {};
+	}
 
 	// Readable when Dispatch has something to do
 	virtual int EventFd() const noexcept = 0;
@@ -108,6 +181,92 @@ public:
 	// has ended, for example because the source was closed or the user
 	// stopped it.
 	virtual bool Dispatch() noexcept = 0;
+};
+
+// A desktop on which windows can be scaled with the virtual-output strategy:
+// the source window moves to an output that no monitor shows, that output is
+// captured, and the pointer is sent there and back. One back end per
+// compositor implements this.
+class DesktopBridge {
+public:
+	// Where the desktops differ in ways the scaling session has to know
+	struct Traits {
+		// A virtual output that gets a refresh rate of its own has a width
+		// that is a multiple of this
+		int32_t customModeWidthStep = 1;
+		// Making a window the active one puts the pointer on it. The session
+		// then makes the source active only when the pointer goes there anyway.
+		bool activationMovesPointer = false;
+		// What the toolbar and the log call the way of capturing
+		const char* captureMethod = "";
+	};
+
+	virtual ~DesktopBridge() = default;
+
+	// For the log and for messages, for example "KWin"
+	virtual const char* Name() const noexcept = 0;
+
+	virtual Traits GetTraits() const noexcept = 0;
+
+	// Empty if the desktop offers everything that scaling needs; otherwise
+	// what it lacks, as a text for the log
+	virtual std::string MissingForScaling() const noexcept = 0;
+
+	// Readable when Dispatch has something to do
+	virtual int EventFd() const noexcept = 0;
+
+	// Processes what the desktop has sent, so that GetWindow and
+	// ActiveWindowId are current. Returns false when the connection is lost.
+	virtual bool Dispatch() noexcept = 0;
+
+	// The windows as they are now
+	virtual std::vector<WindowInfo> ListWindows() noexcept = 0;
+
+	// The window as of the last Dispatch; false if it does not exist (any more)
+	virtual bool GetWindow(const std::string& windowId, WindowInfo& info) const noexcept = 0;
+
+	// As of the last Dispatch; empty if no window is active
+	virtual std::string ActiveWindowId() const noexcept = 0;
+
+	// The outputs as they are now, virtual ones included
+	virtual std::vector<OutputInfo> ListOutputs() noexcept = 0;
+
+	// Creates an output that no monitor shows, and a screen cast of it with
+	// the cursor as metadata. The output exists as long as the session; on
+	// return `outputName` is its name. The consumer of the screen cast must
+	// ask for exactly `size`.
+	virtual std::unique_ptr<CaptureSession> CreateVirtualOutput(
+		const std::string& name, Size size, std::string& outputName) noexcept = 0;
+
+	// Moves an output and gives it the mode of this size with this refresh
+	// rate (in thousandths of a hertz). Returns false if the output does not
+	// end up with this size at this place.
+	virtual bool ConfigureOutput(
+		const std::string& outputName, Size size, Point position, int32_t refreshRate) noexcept = 0;
+
+	// Removes a virtual output that a session which did not end properly
+	// left behind, if the desktop keeps such outputs
+	virtual void RemoveStaleVirtualOutput(const std::string& /*outputName*/) noexcept {}
+
+	// Puts a window at an exact place, on whatever output that is, and waits
+	// until the desktop reports it there. Returns false if that does not happen.
+	virtual bool PlaceWindow(const std::string& windowId, const WindowPlacement& placement) noexcept = 0;
+
+	// Does not wait for the change to be reported
+	virtual bool SetWindowProperties(const std::string& windowId, const WindowProperties& properties) noexcept = 0;
+
+	// Moves the pointer to a position in desktop coordinates
+	virtual bool MovePointer(Point position) noexcept = 0;
+
+	// The pointer devices whose speed can be set, with their current values
+	virtual std::vector<PointerDevice> ReadPointerDevices() noexcept = 0;
+
+	// Gives every listed device its value
+	virtual void ApplyPointerSpeed(std::span<const PointerDevice> devices) noexcept = 0;
+
+	// The back end for the desktop the program runs on; null with the reason
+	// in `error` if there is none
+	static std::unique_ptr<DesktopBridge> Create(std::string& error) noexcept;
 };
 
 }

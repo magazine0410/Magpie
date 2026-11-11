@@ -14,6 +14,7 @@
 #include <rapidjson/document.h>
 #include <systemd/sd-bus.h>
 #include <wayland-client.h>
+#include "KWinPointerSpeed.h"
 #include "Logger.h"
 #include "fake-input-client-protocol.h"
 #include "plasma-window-management-client-protocol.h"
@@ -398,6 +399,38 @@ bool KWinBridge::HasFakeInput() const noexcept {
 	return _connection && _connection->fakeInput;
 }
 
+DesktopBridge::Traits KWinBridge::GetTraits() const noexcept {
+	return {
+		// KWin computes the mode, and the formula for that only yields
+		// widths that are multiples of 8
+		.customModeWidthStep = 8,
+		.activationMovesPointer = false,
+		.captureMethod = "Virtual output (PipeWire)"
+	};
+}
+
+std::string KWinBridge::MissingForScaling() const noexcept {
+	std::string missing;
+	const auto add = [&](bool isThere, const char* what) {
+		if (!isThere) {
+			missing += missing.empty() ? "" : ", ";
+			missing += what;
+		}
+	};
+	add(WindowManagementVersion() != 0, "the window list (org_kde_plasma_window_management)");
+	add(ScreencastVersion() != 0, "virtual outputs (zkde_screencast_unstable_v1)");
+	add(HasFakeInput(), "pointer movement (org_kde_kwin_fake_input)");
+	return missing;
+}
+
+std::vector<PointerDevice> KWinBridge::ReadPointerDevices() noexcept {
+	return KWinPointerSpeed::ReadDevices();
+}
+
+void KWinBridge::ApplyPointerSpeed(std::span<const PointerDevice> devices) noexcept {
+	KWinPointerSpeed::Apply(devices);
+}
+
 int KWinBridge::EventFd() const noexcept {
 	return wl_display_get_fd(_connection->display);
 }
@@ -465,6 +498,8 @@ std::vector<OutputInfo> KWinBridge::ListOutputs() noexcept {
 	for (const std::unique_ptr<Connection::Output>& output : _connection->outputs) {
 		if (output->isComplete) {
 			result.push_back(output->info);
+			// The name KWin gives the outputs of its screen cast protocol
+			result.back().isVirtual = output->info.name.starts_with("Virtual-");
 		}
 	}
 	return result;
@@ -768,7 +803,7 @@ bool KWinBridge::_RunScript(const std::string& script) noexcept {
 	return result >= 0;
 }
 
-bool KWinBridge::PlaceWindow(const std::string& windowId, const Placement& placement) noexcept {
+bool KWinBridge::PlaceWindow(const std::string& windowId, const WindowPlacement& placement) noexcept {
 	const Rect& rect = placement.frameRect;
 	const bool toOutput = !placement.output.empty();
 	const bool setGeometry = placement.setGeometry && !toOutput;

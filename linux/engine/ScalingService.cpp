@@ -167,11 +167,12 @@ ScalingService::~ScalingService() {
 bool ScalingService::Initialize(Config config, std::string& error) noexcept {
 	_config = std::move(config);
 
-	if (!_bridge.Initialize()) {
-		error = "This desktop does not offer KWin's interfaces.";
+	_bridge = DesktopBridge::Create(error);
+	if (!_bridge) {
 		return false;
 	}
-	ScalingSession::RecoverAfterCrash(_bridge, Paths::StateDir() / "scaling-state");
+	Logger::Get().Info(std::string("The desktop is ") + _bridge->Name());
+	ScalingSession::RecoverAfterCrash(*_bridge, Paths::StateDir() / "scaling-state");
 
 	if (sd_bus_open_user(&_bus) < 0) {
 		error = "Cannot connect to the session bus.";
@@ -301,7 +302,7 @@ void ScalingService::ConfigureShortcuts() noexcept {
 void ScalingService::ListWindows(std::function<void(std::vector<Window> windows)> reply) noexcept {
 	_Post([this, reply = std::move(reply)] {
 		std::vector<Window> windows;
-		for (const WindowInfo& info : _bridge.ListWindows()) {
+		for (const WindowInfo& info : _bridge->ListWindows()) {
 			if (!_IsOwnOrForbidden(info)) {
 				windows.push_back(_Identify(info));
 			}
@@ -391,7 +392,7 @@ bool ScalingService::_StartScaling(const std::string& windowId, bool windowedMod
 	};
 
 	WindowInfo info;
-	if (!_bridge.GetWindow(windowId, info) || _IsOwnOrForbidden(info)) {
+	if (!_bridge->GetWindow(windowId, info) || _IsOwnOrForbidden(info)) {
 		return fail({});
 	}
 
@@ -411,7 +412,7 @@ bool ScalingService::_StartScaling(const std::string& windowId, bool windowedMod
 		options.overlayOptions.takeScreenshotShortcut = _screenshotShortcut;
 
 		_session = std::make_unique<ScalingSession>();
-		error = _session->Start(_bridge, windowId, options, {
+		error = _session->Start(*_bridge, windowId, options, {
 			.effectsDir = _config.effectsDir,
 			.stateFile = Paths::StateDir() / "scaling-state",
 			.validation = _config.validation,
@@ -452,7 +453,7 @@ void ScalingService::_StopScaling(bool byUser) noexcept {
 	// by auto-scale; one that only lost the focus is, when it gets it back.
 	// As ScalingService::_ScalingRuntime_StateChanged on Windows, which
 	// tells the two apart by the foreground window.
-	if (_state != State::Idle && (byUser || _bridge.ActiveWindowId() == _windowId)) {
+	if (_state != State::Idle && (byUser || _bridge->ActiveWindowId() == _windowId)) {
 		_checkedWindow = _windowId;
 	}
 	_windowId.clear();
@@ -490,7 +491,7 @@ void ScalingService::_CheckWaiting() noexcept {
 	static constexpr std::chrono::milliseconds SETTLE_TIME{ 200 };
 
 	WindowInfo info;
-	if (!_bridge.GetWindow(_windowId, info)) {
+	if (!_bridge->GetWindow(_windowId, info)) {
 		_StopScaling(false);
 		return;
 	}
@@ -516,8 +517,8 @@ void ScalingService::_Toggle(bool windowedMode) noexcept {
 	}
 
 	// Also ends a wait for a minimized source
-	_bridge.ListWindows();
-	const std::string active = _bridge.ActiveWindowId();
+	_bridge->ListWindows();
+	const std::string active = _bridge->ActiveWindowId();
 	if (active.empty()) {
 		Logger::Get().Warn("No window is active");
 		_StopScaling(true);
@@ -527,7 +528,7 @@ void ScalingService::_Toggle(bool windowedMode) noexcept {
 }
 
 void ScalingService::_ScaleWindow(const std::string& query, bool windowedMode) noexcept {
-	const std::vector<WindowInfo> windows = _bridge.ListWindows();
+	const std::vector<WindowInfo> windows = _bridge->ListWindows();
 	const std::vector<const WindowInfo*> found = FindWindows(windows, query);
 	if (found.size() == 1) {
 		_StartScaling(found[0]->id, windowedMode);
@@ -540,13 +541,13 @@ void ScalingService::_ScaleWindow(const std::string& query, bool windowedMode) n
 // scaled. Port of ScalingService::_CheckForegroundTimer_Tick, which looks at
 // the foreground window every 50 ms; here the desktop reports the change.
 void ScalingService::_CheckForeground() noexcept {
-	const std::string active = _bridge.ActiveWindowId();
+	const std::string active = _bridge->ActiveWindowId();
 	if (active.empty() || active == _checkedWindow) {
 		return;
 	}
 
 	WindowInfo info;
-	if (!_bridge.GetWindow(active, info)) {
+	if (!_bridge->GetWindow(active, info)) {
 		return;
 	}
 
@@ -591,11 +592,11 @@ void ScalingService::Run() noexcept {
 			pollfd fds[4]{
 				{ busFd, POLLIN, 0 },
 				{ _taskFd, POLLIN, 0 },
-				{ _bridge.EventFd(), POLLIN, 0 },
+				{ _bridge->EventFd(), POLLIN, 0 },
 				{ _config.quitFd, POLLIN, 0 }
 			};
 			poll(fds, _config.quitFd >= 0 ? 4 : 3, _state == State::Waiting ? 20 : -1);
-			if (!_bridge.Dispatch()) {
+			if (!_bridge->Dispatch()) {
 				Logger::Get().Error("The connection to the desktop is lost");
 				break;
 			}

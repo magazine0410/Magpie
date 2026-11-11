@@ -32,6 +32,7 @@ foreach(xml IN ITEMS
 endforeach()
 
 add_library(magpie_engine STATIC
+	FrameSource.cpp
 	PipeWireFrameSource.cpp
 	ScalingService.cpp
 	ScalingSession.cpp

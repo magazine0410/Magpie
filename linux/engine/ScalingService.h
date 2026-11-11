@@ -18,7 +18,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "KWinBridge.h"
+#include "Bridge.h"
 #include "PortalShortcuts.h"
 #include "ScalingSession.h"
 #include "Settings.h"
@@ -154,7 +154,7 @@ private:
 	void _CheckForeground() noexcept;
 
 	Config _config;
-	KWinBridge _bridge;
+	std::unique_ptr<DesktopBridge> _bridge;
 	sd_bus* _bus = nullptr;
 	PortalShortcuts _shortcuts;
 	std::unique_ptr<ScalingSession> _session;

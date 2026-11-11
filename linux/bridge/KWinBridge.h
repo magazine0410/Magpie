@@ -40,28 +40,12 @@ struct KWinOutputModes {
 	static bool IsCloseEnough(const Mode& mode, int32_t refreshRate) noexcept;
 };
 
-class KWinBridge {
+class KWinBridge final : public DesktopBridge {
 public:
-	// Where a window is put by PlaceWindow
-	struct Placement {
-		// With decoration, in desktop coordinates
-		Rect frameRect;
-		bool noBorder = false;
-		// Also make it the active window
-		bool activate = false;
-		// False: only the decoration and the activation are changed, for a
-		// window whose place the desktop decides (maximized, fullscreen)
-		bool setGeometry = true;
-		// Not empty: the window is sent to this output and keeps its state,
-		// for a maximized or fullscreen window. frameRect is then where it
-		// is expected to end up, or empty if that is not known.
-		std::string output;
-	};
-
 	KWinBridge() noexcept;
 	KWinBridge(const KWinBridge&) = delete;
 	KWinBridge(KWinBridge&&) = delete;
-	~KWinBridge();
+	~KWinBridge() override;
 
 	// Opens a Wayland connection of its own. Returns false if there is no
 	// compositor or it offers neither the window list nor the screen cast.
@@ -72,63 +56,50 @@ public:
 	uint32_t ScreencastVersion() const noexcept;
 	bool HasFakeInput() const noexcept;
 
-	// Readable when Dispatch has something to do
-	int EventFd() const noexcept;
+	const char* Name() const noexcept override {
+		return "KWin";
+	}
 
-	// Processes what KWin has sent, so that GetWindow and ActiveWindowId are
-	// current. Returns false when the connection is lost.
-	bool Dispatch() noexcept;
+	Traits GetTraits() const noexcept override;
 
-	// The windows as they are now
-	std::vector<WindowInfo> ListWindows() noexcept;
+	std::string MissingForScaling() const noexcept override;
 
-	// The window as of the last Dispatch; false if it does not exist (any more)
-	bool GetWindow(const std::string& windowId, WindowInfo& info) const noexcept;
+	int EventFd() const noexcept override;
 
-	// As of the last Dispatch; empty if no window is active
-	std::string ActiveWindowId() const noexcept;
+	bool Dispatch() noexcept override;
 
-	// The outputs as they are now, virtual ones included
-	std::vector<OutputInfo> ListOutputs() noexcept;
+	std::vector<WindowInfo> ListWindows() noexcept override;
+
+	bool GetWindow(const std::string& windowId, WindowInfo& info) const noexcept override;
+
+	std::string ActiveWindowId() const noexcept override;
+
+	std::vector<OutputInfo> ListOutputs() noexcept override;
 
 	// Starts a screen cast of the window, with the cursor as metadata of the
 	// stream. Returns null if KWin refuses.
 	std::unique_ptr<CaptureSession> CaptureWindow(const std::string& windowId) noexcept;
 
-	// Creates an output that no monitor shows, and a screen cast of it with
-	// the cursor as metadata. The output exists as long as the session; on
-	// return `outputName` is its name. KWin takes the output's size from the
-	// stream's negotiation, so the consumer must ask for exactly `size`.
+	// KWin takes the output's size from the stream's negotiation, so the
+	// consumer must ask for exactly `size`.
 	std::unique_ptr<CaptureSession> CreateVirtualOutput(
-		const std::string& name, Size size, std::string& outputName) noexcept;
+		const std::string& name, Size size, std::string& outputName) noexcept override;
 
-	// Moves an output and gives it the mode of this size with this refresh
-	// rate (in thousandths of a hertz). A new virtual output has 60 Hz, or
-	// whatever mode KWin remembers for an output of its name, which may
-	// have another size. Returns false if the output does not end up with
-	// this size at this place.
-	bool ConfigureOutput(const std::string& outputName, Size size, Point position, int32_t refreshRate) noexcept;
+	// A new virtual output has 60 Hz, or whatever mode KWin remembers for an
+	// output of its name, which may have another size.
+	bool ConfigureOutput(
+		const std::string& outputName, Size size, Point position, int32_t refreshRate) noexcept override;
 
-	// Puts a window at an exact place, on whatever output that is, and waits
-	// until KWin reports it there. Returns false if that does not happen.
-	bool PlaceWindow(const std::string& windowId, const Placement& placement) noexcept;
+	bool PlaceWindow(const std::string& windowId, const WindowPlacement& placement) noexcept override;
 
-	// What else can be set on a window. What has no value is left alone.
-	struct WindowProperties {
-		// The desktop keeps the window above the ordinary ones
-		std::optional<bool> keepAbove;
-		std::optional<bool> minimized;
-		// Not in the task bar, the window switcher and the pager
-		std::optional<bool> skipTaskbar;
-		// Put above the other windows once
-		bool raise = false;
-	};
+	bool SetWindowProperties(const std::string& windowId, const WindowProperties& properties) noexcept override;
 
-	// Does not wait for the change to be reported
-	bool SetWindowProperties(const std::string& windowId, const WindowProperties& properties) noexcept;
+	bool MovePointer(Point position) noexcept override;
 
-	// Moves the pointer to a position in desktop coordinates
-	bool MovePointer(Point position) noexcept;
+	// Through the properties KWin publishes on D-Bus, see KWinPointerSpeed.h
+	std::vector<PointerDevice> ReadPointerDevices() noexcept override;
+
+	void ApplyPointerSpeed(std::span<const PointerDevice> devices) noexcept override;
 
 private:
 	struct Connection;

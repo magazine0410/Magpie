@@ -1,4 +1,4 @@
-// One scaled window, from start to stop, with the strategy for KWin: the
+// One scaled window, from start to stop, with the virtual-output strategy: the
 // source window moves to a virtual output of its own size, that output is
 // captured, and the scaled picture is shown where the user looks: on one or
 // more monitors (fullscreen scaling) or in a window (windowed scaling). The
@@ -22,10 +22,9 @@
 #include "Bridge.h"
 #include "CursorDrawer.h"
 #include "EffectChain.h"
+#include "FrameSource.h"
 #include "Geometry.h"
-#include "KWinPointerSpeed.h"
 #include "OverlayDrawer.h"
-#include "PipeWireFrameSource.h"
 #include "ScalingOptions.h"
 #include "ScalingSurface.h"
 #include "SessionInhibitor.h"
@@ -34,8 +33,6 @@
 #include "VulkanDevice.h"
 
 namespace Magpie {
-
-class KWinBridge;
 
 class ScalingSession {
 public:
@@ -134,7 +131,8 @@ public:
 		// leaves; zero on sides without an exit, and on all sides for a
 		// source that fills its output
 		int32_t ringLeft = 0, ringTop = 0, ringRight = 0, ringBottom = 0;
-		// Columns on the right that only make the width a multiple of 8
+		// Columns on the right that only make the width one the desktop
+		// accepts for a mode of its own
 		int32_t padRight = 0;
 		Size size;
 		Point position;
@@ -147,21 +145,22 @@ public:
 	};
 
 	// Returns false if the window is on no monitor or there is no room for
-	// the virtual output.
+	// the virtual output. `widthStep`: see DesktopBridge::Traits.
 	static bool PlanVirtualOutput(
 		const PlanRequest& request,
 		std::span<const OutputInfo> outputs,
-		VirtualOutputPlan& plan
+		VirtualOutputPlan& plan,
+		int32_t widthStep = 8
 	) noexcept;
 
 	// Undoes what a session that did not end properly left behind: puts the
 	// window noted in the state file back. Call at program start.
-	static void RecoverAfterCrash(KWinBridge& bridge, const std::filesystem::path& stateFile) noexcept;
+	static void RecoverAfterCrash(DesktopBridge& bridge, const std::filesystem::path& stateFile) noexcept;
 
 	// Moves the window to a virtual output and shows the first scaled frame.
 	// On failure everything is put back and the reason has been logged.
 	ScalingError Start(
-		KWinBridge& bridge,
+		DesktopBridge& bridge,
 		const std::string& windowId,
 		const ScalingOptions& options,
 		const Config& config
@@ -301,7 +300,8 @@ private:
 	// The device is declared first, so that it is destroyed last
 	VulkanDevice _device;
 
-	KWinBridge* _bridge = nullptr;
+	DesktopBridge* _bridge = nullptr;
+	DesktopBridge::Traits _traits;
 	ScalingOptions _options;
 	Config _config;
 
@@ -320,7 +320,7 @@ private:
 	// The strip on each side of the virtual output; zero where the pointer
 	// cannot leave
 	int32_t _ringLeft = 0, _ringTop = 0, _ringRight = 0, _ringBottom = 0;
-	// Columns on the right that only make the width a multiple of 8
+	// Columns on the right that only make the width one the desktop accepts
 	int32_t _padRight = 0;
 	// The source window on the virtual output, relative to that output
 	Rect _sourceRect;
@@ -336,7 +336,7 @@ private:
 	// Keeping the screen on and notifications away, if the options ask for it
 	std::unique_ptr<SessionInhibitor> _inhibitor;
 	std::unique_ptr<CaptureSession> _capture;
-	std::unique_ptr<PipeWireFrameSource> _frameSource;
+	std::unique_ptr<FrameSource> _frameSource;
 	std::vector<View> _views;
 	// The area the picture is laid out in, in desktop coordinates: what the
 	// monitors cover together, or the content of the window
@@ -383,7 +383,7 @@ private:
 
 	// The pointer devices with the speed they had before scaling; empty if
 	// the speed is not to be adjusted
-	std::vector<KWinPointerSpeed::Device> _pointerDevices;
+	std::vector<PointerDevice> _pointerDevices;
 	bool _isPointerSlowed = false;
 
 	// Writes the last screenshot to its file
