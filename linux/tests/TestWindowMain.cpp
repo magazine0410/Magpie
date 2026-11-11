@@ -78,7 +78,11 @@ int main(int argc, char** argv) {
 			}
 		}
 		for (const TestKeyEvent& event : window.TakeKeyEvents()) {
-			std::printf("key %u %s\n", event.key, event.isPressed ? "down" : "up");
+			if (event.isModifiers) {
+				std::printf("modifiers %u\n", event.depressed);
+			} else {
+				std::printf("key %u %s\n", event.key, event.isPressed ? "down" : "up");
+			}
 		}
 		std::fflush(stdout);
 		std::this_thread::sleep_for(10ms);

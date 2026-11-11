@@ -800,7 +800,13 @@ TEST_CASE("Key bindings made on Sway report their keys", "[sway][desktop]") {
 
 	// A key that is not bound goes to the window
 	press({ KEY_B });
-	REQUIRE(fixture.WaitFor([&] { return window->TakeKeyEvents().size() == 2; }));
+	int keyCount = 0;
+	REQUIRE(fixture.WaitFor([&] {
+		for (const TestKeyEvent& event : window->TakeKeyEvents()) {
+			keyCount += event.isModifiers ? 0 : 1;
+		}
+		return keyCount == 2;
+	}));
 	CHECK(bridge.TakeActivatedShortcuts().empty());
 
 	press({ KEY_LEFTALT, KEY_LEFTSHIFT, KEY_A }, SHIFT | ALT);
@@ -1421,6 +1427,38 @@ TEST_CASE("A program is scaled in a nested session", "[sway][desktop][session][n
 		REQUIRE(fixture.StepUntil([&] { return fixture.LastEvent("key 50 up") != ""; }));
 		CHECK(fixture.LastEvent("key 50 down") != "");
 
+		// Shift held with a key: the program is told of the modifier before
+		// the key, so that it reads a capital letter
+		keyboard.Key(KEY_LEFTSHIFT, true);
+		keyboard.Modifiers(1, 0, 0, 0);
+		keyboard.Key(KEY_M, true);
+		keyboard.Key(KEY_M, false);
+		keyboard.Key(KEY_LEFTSHIFT, false);
+		keyboard.Modifiers(0, 0, 0, 0);
+		keyboard.Flush();
+		REQUIRE(fixture.StepUntil([&] { return fixture.LastEvent("modifiers 0") != "" && fixture.LastEvent("modifiers 1") != ""; }));
+		{
+			// In this order: Shift down, the modifier, the letter, and the
+			// modifier gone after it
+			const std::vector<std::string> events = fixture.Events();
+			const auto find = [&](std::string_view line, size_t from) {
+				for (size_t i = from; i < events.size(); ++i) {
+					if (events[i] == line) {
+						return i;
+					}
+				}
+				return events.size();
+			};
+			const size_t shift = find("key 42 down", 0);
+			const size_t held = find("modifiers 1", shift);
+			const size_t letter = find("key 50 down", held);
+			const size_t released = find("modifiers 0", letter);
+			CHECK(shift < events.size());
+			CHECK(held < events.size());
+			CHECK(letter < events.size());
+			CHECK(released < events.size());
+		}
+
 		// A key that is held when the desktop takes the keyboard away is
 		// released for the program
 		keyboard.Key(KEY_Z, true);
@@ -1448,6 +1486,26 @@ TEST_CASE("A program is scaled in a nested session", "[sway][desktop][session][n
 		CHECK_FALSE(picture2.info.isFullscreen);
 		CHECK(windowed.DestinationRect().Width() * 3 == windowed.DestinationRect().Height() * 4);
 		windowed.Stop();
+	}
+
+	SECTION("a program that would go on without a display ends with the session") {
+		// Its process number, and then nothing that reacts to a lost display
+		const std::filesystem::path pidFile = fixture.sway->Dir() / "nested-sleep.pid";
+		REQUIRE(nested.Launch({ "sh", "-c", "echo $$ > '" + pidFile.string() + "'; exec sleep 300" }));
+		pid_t pid = 0;
+		REQUIRE(fixture.StepUntil([&] {
+			std::ifstream(pidFile) >> pid;
+			return pid > 0;
+		}));
+		CHECK(kill(pid, 0) == 0);
+
+		session.Stop();
+		nested.Stop();
+		CHECK(kill(pid, 0) == -1);
+		CHECK(errno == ESRCH);
+		CHECK_FALSE(nested.IsRunning());
+		std::error_code ec;
+		std::filesystem::remove(pidFile, ec);
 	}
 
 	SECTION("the session ends when the program closes its window") {

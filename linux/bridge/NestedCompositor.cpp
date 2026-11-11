@@ -1,4 +1,5 @@
 #include "NestedCompositor.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -6,6 +7,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <sstream>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -37,6 +39,114 @@ static std::filesystem::path FindProgram(const char* name) noexcept {
 		rest = end == std::string_view::npos ? std::string_view() : rest.substr(end + 1);
 	}
 	return {};
+}
+
+namespace {
+
+// A process, with the time it was started: a number that the system has
+// given to another process since is then not taken for it
+struct ProcessRef {
+	pid_t pid = 0;
+	unsigned long long startTime = 0;
+};
+
+// The parent and the start time of a process, from /proc/PID/stat
+bool ReadProcess(pid_t pid, pid_t& parent, unsigned long long& startTime) noexcept {
+	std::ifstream file(fmt::format("/proc/{}/stat", pid));
+	std::string text;
+	std::getline(file, text);
+	// The name in parentheses may contain anything; the fields follow the
+	// last closing one: state, parent, and the start time as the twentieth
+	const size_t end = text.rfind(')');
+	if (end == std::string::npos) {
+		return false;
+	}
+	std::istringstream fields(text.substr(end + 1));
+	std::string field;
+	for (int i = 0; i < 20 && (fields >> field); ++i) {
+		if (i == 1) {
+			parent = (pid_t)std::atoi(field.c_str());
+		} else if (i == 19) {
+			startTime = std::strtoull(field.c_str(), nullptr, 10);
+			return true;
+		}
+	}
+	return false;
+}
+
+// The processes that descend from `root`
+std::vector<ProcessRef> Descendants(pid_t root) noexcept {
+	struct Entry {
+		pid_t pid, parent;
+		unsigned long long startTime;
+	};
+	std::vector<Entry> all;
+	std::error_code ec;
+	for (const auto& entry : std::filesystem::directory_iterator("/proc", ec)) {
+		const std::string name = entry.path().filename().string();
+		if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) {
+			continue;
+		}
+		Entry process{ (pid_t)std::atoi(name.c_str()), 0, 0 };
+		if (ReadProcess(process.pid, process.parent, process.startTime)) {
+			all.push_back(process);
+		}
+	}
+
+	std::vector<ProcessRef> result;
+	std::vector<pid_t> parents{ root };
+	while (!parents.empty()) {
+		const pid_t parent = parents.back();
+		parents.pop_back();
+		for (const Entry& process : all) {
+			if (process.parent == parent) {
+				result.push_back({ process.pid, process.startTime });
+				parents.push_back(process.pid);
+			}
+		}
+	}
+	return result;
+}
+
+bool IsAlive(const ProcessRef& process) noexcept {
+	pid_t parent;
+	unsigned long long startTime;
+	return ReadProcess(process.pid, parent, startTime) && startTime == process.startTime;
+}
+
+// Gives the processes a moment to end by themselves, then asks them to, then
+// makes them
+void EndProcesses(const std::vector<ProcessRef>& processes) noexcept {
+	const auto waitUntilGone = [&](milliseconds timeout) {
+		const auto deadline = steady_clock::now() + timeout;
+		while (std::ranges::any_of(processes, IsAlive)) {
+			if (steady_clock::now() > deadline) {
+				return false;
+			}
+			std::this_thread::sleep_for(20ms);
+		}
+		return true;
+	};
+
+	if (waitUntilGone(500ms)) {
+		return;
+	}
+	for (const ProcessRef& process : processes) {
+		if (IsAlive(process)) {
+			Logger::Get().Info(fmt::format("Ending process {} of the nested session, which goes on without it", process.pid));
+			kill(process.pid, SIGTERM);
+		}
+	}
+	if (waitUntilGone(2s)) {
+		return;
+	}
+	for (const ProcessRef& process : processes) {
+		if (IsAlive(process)) {
+			kill(process.pid, SIGKILL);
+		}
+	}
+}
+
 }
 
 NestedCompositor::~NestedCompositor() {
@@ -236,7 +346,17 @@ bool NestedCompositor::Launch(
 		line += ' ' + ShellQuoted(argument);
 	}
 	Logger::Get().Info("Nested session: " + line);
-	return _bridge->Ipc().Command(line);
+
+	// Sway replaces "$name" by a variable of its configuration and "$$" by
+	// a dollar sign, also in commands that arrive over its socket
+	std::string escaped;
+	for (char c : line) {
+		escaped += c;
+		if (c == '$') {
+			escaped += '$';
+		}
+	}
+	return _bridge->Ipc().Command(escaped);
 }
 
 bool NestedCompositor::IsRunning() noexcept {
@@ -253,7 +373,11 @@ bool NestedCompositor::IsRunning() noexcept {
 
 void NestedCompositor::Stop() noexcept {
 	if (_pid > 0) {
-		// Sway ends its clients with it
+		// The programs that were started in it. They lose their windows
+		// with the Sway, and most end at that; one that goes on without a
+		// display would run on unseen.
+		const std::vector<ProcessRef> programs = Descendants(_pid);
+
 		if (_bridge) {
 			_bridge->Ipc().Command("exit", true);
 		}
@@ -273,6 +397,7 @@ void NestedCompositor::Stop() noexcept {
 			waitpid(_pid, nullptr, 0);
 			_pid = -1;
 		}
+		EndProcesses(programs);
 		Logger::Get().Info("Nested session ended");
 	}
 	_bridge.reset();

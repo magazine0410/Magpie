@@ -210,6 +210,9 @@ struct TestPointerEvent {
 struct TestKeyEvent {
 	uint32_t key = 0;
 	bool isPressed = false;
+	// Not a key: which modifiers are held now, as wl_keyboard reports them
+	bool isModifiers = false;
+	uint32_t depressed = 0;
 };
 
 // The test window as a process of its own (the program magpie_test_window),
@@ -585,7 +588,11 @@ private:
 			const std::scoped_lock lock(that._mutex);
 			that._keyEvents.push_back({ key, state == WL_KEYBOARD_KEY_STATE_PRESSED });
 		},
-		.modifiers = [](void*, wl_keyboard*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {},
+		.modifiers = [](void* data, wl_keyboard*, uint32_t, uint32_t depressed, uint32_t, uint32_t, uint32_t) {
+			TestWindow& that = *(TestWindow*)data;
+			const std::scoped_lock lock(that._mutex);
+			that._keyEvents.push_back({ 0, false, true, depressed });
+		},
 		.repeat_info = [](void*, wl_keyboard*, int32_t, int32_t) {}
 	};
 
