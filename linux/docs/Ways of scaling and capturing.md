@@ -40,10 +40,10 @@ Measured on one machine: KDE Plasma 6.8, an NVIDIA RTX 4070 Ti SUPER, a monitor 
 | | Drawn to shown |
 |---|---|
 | The window without scaling | 10.7 ms |
-| Fullscreen scaling | 13 to 16 ms |
+| Fullscreen scaling | 12 to 16 ms |
 | Windowed scaling | 12.6 ms |
 | Scaled on the second graphics card of the machine | 18 ms |
-| Nested session | 15 ms |
+| Nested session | 13 to 15 ms |
 | Nested session with tearing allowed | 6.5 ms |
 
 What scaling adds is the wait for the capture and under a millisecond of Magpie's own work with a light effect. The capture takes a frame at the next refresh of the hidden screen, which runs at the refresh rate of the monitor: up to one refresh interval, half of one on average for a game with a frame rate of its own. On a 60 Hz monitor that is up to 17 ms, on a 240 Hz monitor up to 4 ms. The way from Magpie to the monitor is the same as for any window; on this machine it took 4 to 14 ms and varied by 3 ms from one run to the next.
