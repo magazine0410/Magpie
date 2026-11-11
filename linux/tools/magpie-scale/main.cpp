@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <vector>
 #include <spdlog/sinks/stdout_sinks.h>
-#include "KWinBridge.h"
+#include "Bridge.h"
 #include "Logger.h"
 #include "Paths.h"
 #include "ScalingSession.h"
@@ -311,11 +311,13 @@ int main(int argc, char* argv[]) {
 		options.effects.push_back({ .name = "Bilinear", .scalingType = ScalingType::Fit });
 	}
 
-	KWinBridge bridge;
-	if (!bridge.Initialize()) {
-		std::fprintf(stderr, "This desktop does not offer KWin's interfaces.\n");
+	std::string bridgeError;
+	const std::unique_ptr<DesktopBridge> bridgeOwner = DesktopBridge::Create(bridgeError);
+	if (!bridgeOwner) {
+		std::fprintf(stderr, "%s\n", bridgeError.c_str());
 		return 1;
 	}
+	DesktopBridge& bridge = *bridgeOwner;
 	ScalingSession::RecoverAfterCrash(bridge, config.stateFile);
 
 	if (delay > 0) {

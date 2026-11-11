@@ -279,6 +279,12 @@ private:
 	// last frame.
 	bool _UpdateOverlay(const Rect& destRect, bool& needsRedraw) noexcept;
 
+	// The cursor on the source, as the capture reports it. A pointer that is
+	// on a surface with the picture is not on the source, whatever the
+	// capture says: Sway does not report that the cursor has left an output
+	// when it goes to a surface that hides it.
+	CaptureCursorState _SourceCursor() const noexcept;
+
 	// Sends the pointer from the source to where its picture is on the desktop
 	void _ReleasePointerToPicture(const Rect& destRect) noexcept;
 

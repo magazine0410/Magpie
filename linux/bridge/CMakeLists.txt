@@ -1,5 +1,6 @@
 # The engine's access to the desktop: capability report, window lookup and
-# capture sessions, with one back end for KWin and one for the desktop portal.
+# capture sessions, with back ends for KWin, for Sway and for the desktop
+# portal.
 find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
@@ -7,12 +8,17 @@ pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
 pkg_check_modules(LIBSYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 # The XML descriptions of KWin's protocols; sets PLASMA_WAYLAND_PROTOCOLS_DIR
 find_package(PlasmaWaylandProtocols REQUIRED)
+# The virtual pointer of the wlroots compositors
+pkg_get_variable(WLR_PROTOCOLS_DIR wlr-protocols pkgdatadir)
 
 set(GENERATED)
 foreach(xml IN ITEMS
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/fake-input.xml
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/plasma-window-management.xml
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/zkde-screencast-unstable-v1.xml
+	${WLR_PROTOCOLS_DIR}/unstable/wlr-virtual-pointer-unstable-v1.xml
+	# Not packaged; see the file
+	${CMAKE_CURRENT_SOURCE_DIR}/protocols/virtual-keyboard-unstable-v1.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)
@@ -35,6 +41,10 @@ add_library(magpie_bridge STATIC
 	PortalRequest.cpp
 	PortalShortcuts.cpp
 	SessionInhibitor.cpp
+	SwayBridge.cpp
+	SwayIpc.cpp
+	SwayJson.cpp
+	WlrInput.cpp
 	${GENERATED}
 )
 

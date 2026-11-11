@@ -267,6 +267,8 @@ ScalingError ScalingSession::Start(
 
 	_isRunning = true;
 	_isSourceActive = true;
+	// A window that changes its size is to be noticed on every desktop
+	_bridge->SetWatching(true);
 
 	if (_options.IsWindowedMode()) {
 		// The window appears with its first frame, and only then can it be
@@ -552,7 +554,7 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 		// One surface per monitor; together they show one picture
 		for (const OutputInfo& monitor : _monitors) {
 			auto surface = std::make_unique<ScalingSurface>();
-			if (!surface->CreateLayer(monitor.name, !_options.IsTopmostDisabled()) ||
+			if (!surface->CreateLayer(_bridge->WaylandDisplay(), monitor.name, !_options.IsTopmostDisabled()) ||
 				!_AddView(std::move(surface), monitor.rect)) {
 				return false;
 			}
@@ -580,7 +582,8 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 	}
 
 	auto surface = std::make_unique<ScalingSurface>();
-	if (!surface->CreateWindow(_original.title.empty() ? "Magpie" : _original.title, _config.appId, size,
+	if (!surface->CreateWindow(_bridge->WaylandDisplay(), _original.title.empty() ? "Magpie" : _original.title,
+		_config.appId, size,
 		_minWindowedSize, [this](Size proposed, bool isWidthChanged, bool isHeightChanged) {
 			return ScalingGeometry::CalcResizedWindowedRendererSize(
 				proposed, isWidthChanged, isHeightChanged, _srcSize, _minWindowedSize, _maxWindowedSize);
@@ -830,7 +833,7 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 
 	// The cursor to draw: that of the stream, unless it has rested for
 	// longer than the user allows
-	_cursor = _frameSource->CursorState();
+	_cursor = _SourceCursor();
 	_cursor.isVisible = _cursorAutoHide.Update(
 		_cursor.isVisible, _cursor.pos, _cursor.imageSerial, steady_clock::now());
 	_stepTimer.SetWakeTime(_cursorAutoHide.HideTime());
@@ -891,7 +894,7 @@ bool ScalingSession::_UpdateOverlay(const Rect& destRect, bool& needsRedraw) noe
 	// there can it click on the overlay.
 	std::optional<Point> mousePos;
 	bool canClick = false;
-	const CaptureCursorState& cursor = _frameSource->CursorState();
+	const CaptureCursorState cursor = _SourceCursor();
 	if (cursor.isVisible) {
 		const Size rendererSize = _RendererSize();
 		const Point onRenderer = ScalingGeometry::SrcToScaling(cursor.pos, _frameSource->SrcRect(), destRect,
@@ -1030,7 +1033,20 @@ bool ScalingSession::_TrackSource() noexcept {
 	if (!_isSourceActive) {
 		const std::string active = _bridge->ActiveWindowId();
 		isOtherActive = !active.empty() && active != _windowId && active != _ownWindowId &&
-			_bridge->GetWindow(active, other) && !Overlaps(other.frameRect, _virtualOutputRect);
+			_bridge->GetWindow(active, other);
+		if (isOtherActive && Overlaps(other.frameRect, _virtualOutputRect)) {
+			isOtherActive = false;
+			// On some desktops every new window opens there, because that
+			// is where the active window is. One of another program does
+			// not belong into the picture; on the monitor it is the active
+			// window from the next step on.
+			const bool isOfSource = (other.pid != 0 && other.pid == _original.pid) ||
+				(!other.appId.empty() && other.appId == _original.appId);
+			if (_traits.opensWindowsOnActiveOutput && !isOfSource) {
+				Logger::Get().Info("Sending the new window \"" + other.title + "\" to " + _monitors[0].name);
+				_bridge->PlaceWindow(active, { .activate = true, .setGeometry = false, .output = _monitors[0].name });
+			}
+		}
 	}
 
 	if (!_options.IsWindowedMode()) {
@@ -1073,7 +1089,7 @@ bool ScalingSession::_TrackSource() noexcept {
 		_isFocusLossHandled = false;
 	} else if (isOtherActive && !_isFocusLossHandled) {
 		_isFocusLossHandled = true;
-		if (_frameSource->CursorState().isVisible) {
+		if (_SourceCursor().isVisible) {
 			_ReleasePointerToPicture(_DestRect());
 			++_statistics.pointerReleases;
 			_isCaptureBlocked = true;
@@ -1082,6 +1098,18 @@ bool ScalingSession::_TrackSource() noexcept {
 	}
 
 	return true;
+}
+
+CaptureCursorState ScalingSession::_SourceCursor() const noexcept {
+	CaptureCursorState cursor = _frameSource->CursorState();
+	if (cursor.isVisible) {
+		for (const View& view : _views) {
+			if (view.surface->IsPointerInside()) {
+				cursor.isVisible = false;
+			}
+		}
+	}
+	return cursor;
 }
 
 void ScalingSession::_ReleasePointerToPicture(const Rect& destRect) noexcept {
@@ -1097,7 +1125,7 @@ void ScalingSession::_ReleasePointerToPicture(const Rect& destRect) noexcept {
 // the virtual output (captured: it acts on the source, and its picture is
 // drawn scaled) or on a real monitor (released)
 void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
-	const CaptureCursorState& cursor = _frameSource->CursorState();
+	const CaptureCursorState cursor = _SourceCursor();
 	const Size rendererSize = _RendererSize();
 	const Rect rendererArea{ 0, 0, rendererSize.width, rendererSize.height };
 	const Point origin{ _virtualOutputRect.left, _virtualOutputRect.top };
@@ -1397,10 +1425,11 @@ void ScalingSession::Stop() noexcept {
 	if (_screenshotThread.joinable()) {
 		_screenshotThread.join();
 	}
+	_bridge->SetWatching(false);
 
 	// The pointer goes to where the user sees it, as the destructor of
 	// CursorManager does
-	if (_isRunning && _frameSource->CursorState().isVisible) {
+	if (_isRunning && _SourceCursor().isVisible) {
 		_ReleasePointerToPicture(_DestRect());
 	}
 

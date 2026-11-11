@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "Geometry.h"
 
@@ -183,6 +184,15 @@ public:
 	virtual bool Dispatch() noexcept = 0;
 };
 
+// A global shortcut that a back end is asked to bind
+struct ShortcutRequest {
+	// Names the action; comes back when the keys are pressed
+	std::string id;
+	// The keys as ShortcutToPortalTrigger gives them, for example
+	// "ALT+SHIFT+a"; empty for none
+	std::string trigger;
+};
+
 // A desktop on which windows can be scaled with the virtual-output strategy:
 // the source window moves to an output that no monitor shows, that output is
 // captured, and the pointer is sent there and back. One back end per
@@ -197,6 +207,12 @@ public:
 		// Making a window the active one puts the pointer on it. The session
 		// then makes the source active only when the pointer goes there anyway.
 		bool activationMovesPointer = false;
+		// A window that opens while the source is the active window opens on
+		// the virtual output, whatever program it belongs to. The session
+		// sends it to the monitor unless it is of the source's program.
+		bool opensWindowsOnActiveOutput = false;
+		// The desktop can minimize a window and tells when one is minimized
+		bool canMinimize = true;
 		// What the toolbar and the log call the way of capturing
 		const char* captureMethod = "";
 	};
@@ -211,6 +227,13 @@ public:
 	// Empty if the desktop offers everything that scaling needs; otherwise
 	// what it lacks, as a text for the log
 	virtual std::string MissingForScaling() const noexcept = 0;
+
+	// The name of the socket of the Wayland compositor that this back end
+	// talks to, for the surfaces of the scaled picture; empty for the
+	// compositor of the session
+	virtual std::string WaylandDisplay() const noexcept {
+		return {};
+	}
 
 	// Readable when Dispatch has something to do
 	virtual int EventFd() const noexcept = 0;
@@ -263,6 +286,29 @@ public:
 
 	// Gives every listed device its value
 	virtual void ApplyPointerSpeed(std::span<const PointerDevice> devices) noexcept = 0;
+
+	// While this is on, changes of a window's place and size reach GetWindow
+	// within a quarter of a second, also on a desktop that does not report
+	// them by itself. The scaling session turns it on while it runs.
+	virtual void SetWatching(bool /*isWatching*/) noexcept {}
+
+	// Global shortcuts of the back end's own, for a desktop whose portal has
+	// none. Without them the caller uses the portal.
+	virtual bool HasOwnShortcuts() const noexcept {
+		return false;
+	}
+
+	// Binds the keys. For every shortcut that was bound, the result has its
+	// id and the keys as a text for the user.
+	virtual std::vector<std::pair<std::string, std::string>> BindShortcuts(
+		std::span<const ShortcutRequest> /*shortcuts*/) noexcept {
+		return {};
+	}
+
+	// The ids of the shortcuts that were pressed since the last call
+	virtual std::vector<std::string> TakeActivatedShortcuts() noexcept {
+		return {};
+	}
 
 	// The back end for the desktop the program runs on; null with the reason
 	// in `error` if there is none

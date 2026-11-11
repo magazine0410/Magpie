@@ -1,5 +1,6 @@
 #include "FrameSource.h"
 #include "Bridge.h"
+#include "ImageCopyFrameSource.h"
 #include "Logger.h"
 #include "PipeWireFrameSource.h"
 
@@ -28,10 +29,23 @@ std::unique_ptr<FrameSource> FrameSource::Create(
 		}
 		return source;
 	}
-	default:
-		Logger::Get().Error("There is no frame source for this kind of screen cast");
-		return nullptr;
+	case CaptureSession::Kind::ImageCopy:
+	{
+		auto source = std::make_unique<ImageCopyFrameSource>();
+		if (!source->Initialize(device, {
+			.waylandDisplay = capture.WaylandDisplay(),
+			.outputName = capture.OutputName(),
+			.cropping = options.cropping,
+			.duplicateFrameDetectionMode = options.duplicateFrameDetectionMode,
+			.isStatisticsForDynamicDetectionEnabled = options.isStatisticsForDynamicDetectionEnabled
+		})) {
+			return nullptr;
+		}
+		return source;
 	}
+	}
+	Logger::Get().Error("There is no frame source for this kind of screen cast");
+	return nullptr;
 }
 
 }

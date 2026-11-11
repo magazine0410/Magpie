@@ -405,6 +405,8 @@ DesktopBridge::Traits KWinBridge::GetTraits() const noexcept {
 		// widths that are multiples of 8
 		.customModeWidthStep = 8,
 		.activationMovesPointer = false,
+		.opensWindowsOnActiveOutput = false,
+		.canMinimize = true,
 		.captureMethod = "Virtual output (PipeWire)"
 	};
 }

@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 #include "KWinBridge.h"
 #include "PortalCapture.h"
+#include "SwayBridge.h"
 
 namespace Magpie {
 
@@ -67,6 +68,13 @@ double PointerDevice::Slowed(double acceleration, double scale) noexcept {
 }
 
 std::unique_ptr<DesktopBridge> DesktopBridge::Create(std::string& error) noexcept {
+	if (SwayBridge::IsSessionCompositor()) {
+		auto sway = std::make_unique<SwayBridge>();
+		if (sway->Initialize()) {
+			return sway;
+		}
+	}
+
 	auto kwin = std::make_unique<KWinBridge>();
 	if (kwin->Initialize()) {
 		return kwin;

@@ -127,8 +127,8 @@ struct ScalingSurface::State {
 		wl_region_destroy(region);
 	}
 
-	bool Connect() noexcept {
-		display = wl_display_connect(nullptr);
+	bool Connect(const std::string& displayName) noexcept {
+		display = wl_display_connect(displayName.empty() ? nullptr : displayName.c_str());
 		if (!display) {
 			Logger::Get().Error("Cannot connect to a Wayland compositor");
 			return false;
@@ -347,9 +347,13 @@ ScalingSurface::ScalingSurface() noexcept : _state(std::make_unique<State>()) {}
 
 ScalingSurface::~ScalingSurface() = default;
 
-bool ScalingSurface::CreateLayer(const std::string& outputName, bool aboveEverything) noexcept {
+bool ScalingSurface::CreateLayer(
+	const std::string& displayName,
+	const std::string& outputName,
+	bool aboveEverything
+) noexcept {
 	State& state = *_state;
-	if (!state.Connect()) {
+	if (!state.Connect(displayName)) {
 		return false;
 	}
 	if (!state.layerShell) {
@@ -386,6 +390,7 @@ bool ScalingSurface::CreateLayer(const std::string& outputName, bool aboveEveryt
 }
 
 bool ScalingSurface::CreateWindow(
+	const std::string& displayName,
 	const std::string& title,
 	const std::string& appId,
 	Size size,
@@ -393,7 +398,7 @@ bool ScalingSurface::CreateWindow(
 	SizeRule sizeRule
 ) noexcept {
 	State& state = *_state;
-	if (!state.Connect()) {
+	if (!state.Connect(displayName)) {
 		return false;
 	}
 	if (!state.wmBase) {

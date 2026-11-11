@@ -58,12 +58,15 @@ public:
 	// Opens a Wayland connection of its own and covers the output with this
 	// name. With `aboveEverything` the surface is on the overlay layer, above
 	// notifications and panels as well; otherwise on the top layer.
-	bool CreateLayer(const std::string& outputName, bool aboveEverything) noexcept;
+	// `displayName` is the name of the compositor's socket, or empty for the
+	// compositor of the session.
+	bool CreateLayer(const std::string& displayName, const std::string& outputName, bool aboveEverything) noexcept;
 
 	// Opens a Wayland connection of its own and prepares a window whose
 	// content has this size. The window appears with its first frame. The
 	// user can make it smaller down to `minSize`.
 	bool CreateWindow(
+		const std::string& displayName,
 		const std::string& title,
 		const std::string& appId,
 		Size size,

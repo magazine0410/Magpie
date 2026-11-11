@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="virtual_keyboard_unstable_v1">
+  <description summary="keyboard events from a client">
+    A description of the wire format of the protocol
+    virtual-keyboard-unstable-v1, which wlroots compositors implement, written
+    for Magpie: the interfaces, requests and arguments in the order the
+    compositors expect them. It is not packaged with wayland-protocols or
+    wlr-protocols, so it is kept here.
+  </description>
+
+  <interface name="zwp_virtual_keyboard_v1" version="1">
+    <description summary="a keyboard whose keys a client presses">
+      The seat it was made for gets the keys as if from a real keyboard.
+    </description>
+
+    <request name="keymap">
+      <description summary="the keymap the key codes refer to">
+        As wl_keyboard.keymap has it: a format of wl_keyboard.keymap_format, a
+        file with the keymap and the size of that file. Has to be sent before
+        the first key.
+      </description>
+      <arg name="format" type="uint"/>
+      <arg name="fd" type="fd"/>
+      <arg name="size" type="uint"/>
+    </request>
+
+    <enum name="error">
+      <entry name="no_keymap" value="0" summary="no keymap was set"/>
+    </enum>
+
+    <request name="key">
+      <description summary="a key was pressed or released">
+        As wl_keyboard.key has it: a time in milliseconds, the key code of
+        evdev and a state of wl_keyboard.key_state.
+      </description>
+      <arg name="time" type="uint"/>
+      <arg name="key" type="uint"/>
+      <arg name="state" type="uint"/>
+    </request>
+
+    <request name="modifiers">
+      <description summary="the state of the modifiers changed">
+        As wl_keyboard.modifiers has it.
+      </description>
+      <arg name="mods_depressed" type="uint"/>
+      <arg name="mods_latched" type="uint"/>
+      <arg name="mods_locked" type="uint"/>
+      <arg name="group" type="uint"/>
+    </request>
+
+    <request name="destroy" type="destructor" since="1">
+      <description summary="remove the keyboard"/>
+    </request>
+  </interface>
+
+  <interface name="zwp_virtual_keyboard_manager_v1" version="1">
+    <description summary="makes virtual keyboards"/>
+
+    <enum name="error">
+      <entry name="unauthorized" value="0" summary="the client may not make virtual keyboards"/>
+    </enum>
+
+    <request name="create_virtual_keyboard">
+      <description summary="a new virtual keyboard for a seat"/>
+      <arg name="seat" type="object" interface="wl_seat"/>
+      <arg name="id" type="new_id" interface="zwp_virtual_keyboard_v1"/>
+    </request>
+  </interface>
+</protocol>

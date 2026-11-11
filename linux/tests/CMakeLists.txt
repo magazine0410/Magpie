@@ -54,15 +54,34 @@ catch_discover_tests(magpie_render_tests PROPERTIES LABELS gpu TIMEOUT 600)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
+# The tests of the Sway back end start a Sway of their own that shows nothing,
+# and skip themselves if there is no program "sway". Their test window is a
+# Wayland client, and their keyboard needs a keymap from libxkbcommon.
+pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
+
 add_executable(magpie_engine_tests
 	RenderTestListener.cpp
 	TestBridge.cpp
 	TestFrameSource.cpp
 	TestScalingSession.cpp
+	TestSway.cpp
 )
 
 target_link_libraries(magpie_engine_tests PRIVATE
-	magpie_engine magpie_bridge PkgConfig::PIPEWIRE magpie_warnings Catch2::Catch2WithMain)
+	magpie_engine magpie_bridge PkgConfig::PIPEWIRE PkgConfig::WAYLAND_CLIENT PkgConfig::XKBCOMMON
+	magpie_warnings Catch2::Catch2WithMain)
+# The header of xdg-shell that the engine generates for itself
+target_include_directories(magpie_engine_tests PRIVATE $<TARGET_PROPERTY:magpie_engine,BINARY_DIR>)
+
+# The window of those tests as a program, for a window of another process
+add_executable(magpie_test_window TestWindowMain.cpp)
+target_link_libraries(magpie_test_window PRIVATE magpie_engine magpie_bridge PkgConfig::WAYLAND_CLIENT magpie_warnings)
+target_include_directories(magpie_test_window PRIVATE $<TARGET_PROPERTY:magpie_engine,BINARY_DIR>)
+target_compile_options(magpie_test_window PRIVATE -Wno-missing-field-initializers)
+add_dependencies(magpie_engine_tests magpie_test_window)
+target_compile_definitions(magpie_engine_tests PRIVATE
+	MAGPIE_TEST_WINDOW_PROGRAM="$<TARGET_FILE:magpie_test_window>")
 target_compile_definitions(magpie_engine_tests PRIVATE
 	MAGPIE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
 	MAGPIE_EFFECTS_DIR="${MAGPIE_EFFECTS_DIR}"

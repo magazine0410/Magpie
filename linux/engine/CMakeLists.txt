@@ -1,6 +1,6 @@
-# What turns a window into a scaled picture: the frame source that receives a
-# screen cast from PipeWire, the surface that shows the picture, and the
-# scaling session that ties them to the desktop.
+# What turns a window into a scaled picture: the frame sources (a screen cast
+# from PipeWire, an output copied over Wayland), the surface that shows the
+# picture, and the scaling session that ties them to the desktop.
 find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
@@ -18,6 +18,11 @@ foreach(xml IN ITEMS
 	${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml
 	# Title bar and borders from the desktop
 	${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
+	# Copying an output's picture and cursor, for Sway and the nested session;
+	# the second names the windows the first could capture as well
+	${WAYLAND_PROTOCOLS_DIR}/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml
+	${WAYLAND_PROTOCOLS_DIR}/staging/ext-image-capture-source/ext-image-capture-source-v1.xml
+	${WAYLAND_PROTOCOLS_DIR}/staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)
@@ -33,6 +38,7 @@ endforeach()
 
 add_library(magpie_engine STATIC
 	FrameSource.cpp
+	ImageCopyFrameSource.cpp
 	PipeWireFrameSource.cpp
 	ScalingService.cpp
 	ScalingSession.cpp
