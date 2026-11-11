@@ -31,6 +31,11 @@
 #   gpu         scaled on the second graphics card
 #   windowed    windowed scaling
 #   nested      nested sessions with the three present modes
+#   compare     the three present modes in turn, three times over, to tell
+#               their difference from the difference between two runs (not
+#               part of the default)
+#   tearing     a nested session launched with --tearing, and one without
+#               (not part of the default)
 # Environment: OUT, the directory for logs (default: a new one in /tmp);
 #   RUN_SECONDS, how long each variant is scaled (default 6)
 set -u
@@ -193,6 +198,17 @@ if wants fullscreen || wants present || wants pointer || wants effect || wants g
 	stop_source
 fi
 
+if wants compare; then
+	start_source compare
+	BASELINE=$BASELINE_FREE
+	for round in 1 2 3; do
+		for mode in mailbox fifo immediate; do
+			scale_and_report "compare_${mode}_$round" --effect Lanczos,type=fit --present-mode "$mode"
+		done
+	done
+	stop_source
+fi
+
 if wants fps60; then
 	direct fps60 --fps 60
 	start_source fps60 --fps 60
@@ -234,6 +250,40 @@ if wants nested; then
 			grep -E "^# " "$OUT/magpie_nested_$mode.log" 2>/dev/null | head -1 | cut -c3-240
 			grep -E "Swap chain|error|warn|did not" "$OUT/engine_nested_$mode.log" | sed -E 's/^[^|]*\|[^|]*\|[^|]*\|[^|]*\|//' | cut -c1-200 | head -5
 			python3 "$REPORT" --baseline "$BASELINE_FREE" "$SOURCE_LOG" "$OUT/magpie_nested_$mode.log" | tail -n +5
+			sleep 0.7
+		done
+	fi
+fi
+
+if wants tearing; then
+	if busctl --user status io.github.magazine0410.Magpie > /dev/null 2>&1; then
+		echo
+		echo "Magpie is running, so the tearing part is skipped (the service can run only once)."
+	else
+		pointer move 4800 540
+		for option in "" --tearing; do
+			name=launch${option:+_tearing}
+			echo
+			echo "--- nested session, magpie-ctl launch $option ---"
+			# The present mode is what the service chooses for the launch
+			MAGPIE_LATENCY_LOG=$OUT/magpie_$name.log \
+				"$B/tools/magpie-engine/magpie-engine" --effects-dir "$REPO/src/Effects" --mode Lanczos \
+				--no-shortcuts --no-cursor-speed -v > "$OUT/engine_$name.log" 2>&1 &
+			ENGINE_PID=$!
+			PIDS+=("$ENGINE_PID")
+			sleep 1.5
+			SOURCE_LOG=$OUT/source_$name.log
+			# shellcheck disable=SC2086
+			"$B/tools/magpie-ctl/magpie-ctl" launch $option --size 640x480 -- \
+				"$SOURCE" --log "$SOURCE_LOG" --duration 600 > /dev/null
+			sleep "$((RUN_SECONDS + 2))"
+			"$B/tools/magpie-ctl/magpie-ctl" stop > /dev/null 2>&1
+			sleep 0.5
+			kill "$ENGINE_PID" 2> /dev/null
+			wait "$ENGINE_PID" 2> /dev/null
+			grep -E "^# " "$OUT/magpie_$name.log" 2> /dev/null | head -1 | cut -c3-240
+			echo "the service says the picture may tear: $(grep -c "may tear" "$OUT/engine_$name.log") time(s)"
+			python3 "$REPORT" --baseline "$BASELINE_FREE" "$SOURCE_LOG" "$OUT/magpie_$name.log" | tail -n +5
 			sleep 0.7
 		done
 	fi
