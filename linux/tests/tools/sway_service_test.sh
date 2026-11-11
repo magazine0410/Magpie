@@ -75,7 +75,8 @@ ls /dev/dri/renderD* > /dev/null 2>&1 || export WLR_RENDERER=${WLR_RENDERER:-pix
 
 echo "xwayland disable" > "$T/sway.conf"
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway -c "$T/sway.conf" > "$T/sway.log" 2>&1 &
-PIDS+=("$!")
+SWAY_PID=$!
+PIDS+=("$SWAY_PID")
 for i in $(seq 1 100); do
 	[ -S "$SWAYSOCK" ] && [ -S "$T/bus" ] && ls "$T"/wayland-* > /dev/null 2>&1 && break
 	sleep 0.1
@@ -335,6 +336,29 @@ check "its picture covers the monitor" "$(picture nested-game)" "1920x1080"
 "$CTL" stop
 check "stop" "$(wait_status idle 5)" "idle"
 check "still running after SIGTERM" "$(stop_engine TERM)" "no"
+
+echo "--- what is scaled goes away under the service ---"
+: > "$T/engine.log"
+start_engine
+"$WINDOW" --title victim --app-id magpie.test.victim > /dev/null 2>&1 &
+VICTIM=$!
+PIDS+=("$VICTIM")
+for i in $(seq 1 30); do [ -n "$(window_line victim)" ] && break; sleep 0.1; done
+"$CTL" scale victim
+check "a window is scaled" "$(wait_status scaling 5)" "scaling"
+sleep 0.3
+kill -9 "$VICTIM"
+check "its program is killed, and scaling ends" "$(wait_status idle 5)" "idle"
+sleep 0.3
+check "the output made for it is removed" "$(output_names)" "HEADLESS-1"
+"$CTL" scale source
+check "another window is scaled" "$(wait_status scaling 5)" "scaling"
+sleep 0.3
+# The compositor itself: as when it crashes or is restarted
+kill -9 "$SWAY_PID"
+for i in $(seq 1 50); do kill -0 "$ENGINE_PID" 2> /dev/null || break; sleep 0.1; done
+check "Sway is killed, and the service ends" "$(kill -0 "$ENGINE_PID" 2> /dev/null && echo running || echo ended)" "ended"
+check "it says why" "$(grep -c "connection to the desktop is lost" "$T/engine.log")" "1"
 
 echo
 echo "warnings and errors of the service:"

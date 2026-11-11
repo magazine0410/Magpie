@@ -1,9 +1,11 @@
 # The image in which container-check.sh builds the RPM: Fedora with the
-# packages the spec file asks for, and what the tests of Sway and of the
-# nested session need on a machine without a graphics card.
+# packages the spec file asks for. Sway is not installed, as in the build
+# root of a distribution, so the package's own check skips the tests that
+# need it; its package files are kept at hand for the run of those tests
+# that follows the build.
 FROM registry.fedoraproject.org/fedora:44
 COPY magpie-upscaler.spec /tmp/magpie-upscaler.spec
-RUN dnf -y install rpm-build git-core 'dnf5-command(builddep)' \
-        sway mesa-dri-drivers dbus-daemon procps-ng \
+RUN dnf -y install rpm-build git-core 'dnf5-command(builddep)' dbus-daemon procps-ng \
     && dnf -y builddep /tmp/magpie-upscaler.spec \
-    && dnf clean all
+    && dnf clean all \
+    && dnf -y --setopt=keepcache=1 install --downloadonly sway

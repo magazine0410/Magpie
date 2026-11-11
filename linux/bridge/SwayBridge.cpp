@@ -32,9 +32,11 @@ struct SwayBridge::Shared {
 	}
 
 	// Events that arrive while a reply is awaited are not announced by the
-	// socket again; this descriptor stands in for them
+	// socket again; this descriptor stands in for them. So it does for a
+	// connection that broke in a request: the socket is closed then and
+	// announces nothing, and whoever waits has to learn of it.
 	void NoteQueuedEvents() noexcept {
-		if (ipc.HasQueuedEvents() && wakeFd >= 0) {
+		if ((ipc.HasQueuedEvents() || !ipc.IsConnected()) && wakeFd >= 0) {
 			eventfd_write(wakeFd, 1);
 		}
 	}
@@ -237,6 +239,9 @@ bool SwayBridge::Dispatch() noexcept {
 	eventfd_t queued;
 	eventfd_read(_shared->wakeFd, &queued);
 	if (!ipc.ReadEvents()) {
+		// Sway is gone. The descriptor stays readable, so that every wait
+		// for this bridge ends at once and leads here again.
+		eventfd_write(_shared->wakeFd, 1);
 		return false;
 	}
 

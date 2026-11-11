@@ -1489,6 +1489,49 @@ struct NestedFixture : SessionFixture {
 
 }
 
+TEST_CASE("Scaling ends when the monitor with the picture goes away", "[sway][desktop][session]") {
+	SessionFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& bridge = fixture.bridge;
+	ScalingSession& session = fixture.session;
+
+	// A second monitor, on which the window is and is scaled
+	REQUIRE(fixture.sway->Command("create_output"));
+	REQUIRE(fixture.sway->Command("output HEADLESS-2 mode --custom 1280x720@60Hz position 1920 0"));
+	REQUIRE(fixture.WaitFor([&] { return bridge.ListOutputs().size() == 2; }));
+	const auto window = fixture.OpenWindow({ .title = "source" });
+	SwayWindow before = fixture.Find("source");
+	if (before.output != "HEADLESS-2") {
+		REQUIRE(fixture.sway->Command("[con_id=" + before.info.id + "] move container to output HEADLESS-2"));
+		before = fixture.Find("source");
+	}
+	REQUIRE(before.output == "HEADLESS-2");
+
+	REQUIRE(session.Start(bridge, before.info.id, fixture.options, fixture.config) == ScalingError::NoError);
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// As when it is switched off or its cable is pulled
+	REQUIRE(fixture.sway->Command("output HEADLESS-2 unplug"));
+	CHECK_FALSE(fixture.StepUntil([] { return false; }, 3s));
+	CHECK(session.GetEndReason() == ScalingSession::EndReason::MonitorRemoved);
+
+	session.Stop();
+	CHECK_FALSE(std::filesystem::exists(fixture.config.stateFile));
+	REQUIRE(fixture.WaitFor([&] { return bridge.ListOutputs().size() == 1; }));
+	// The window cannot go back to where it was. It is on the monitor that
+	// is left, all of it, with its size and its title bar.
+	const SwayWindow after = fixture.Find("source");
+	CHECK(after.output == "HEADLESS-1");
+	CHECK(fixture.HasBorder("source", before.border));
+	const Rect frame = fixture.Find("source").info.frameRect;
+	CHECK(frame.Width() == before.info.frameRect.Width());
+	CHECK(frame.Height() == before.info.frameRect.Height());
+	CHECK(frame.left >= 0);
+	CHECK(frame.top >= 0);
+	CHECK(frame.right <= 1920);
+	CHECK(frame.bottom <= 1080);
+}
+
 TEST_CASE("A program is scaled in a nested session", "[sway][desktop][session][nested]") {
 	NestedFixture fixture;
 	REQUIRE_SWAY(fixture);

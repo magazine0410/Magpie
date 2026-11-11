@@ -106,6 +106,7 @@ static const char* Describe(ScalingSession::EndReason reason) {
 	case SourceMoved: return "the source window was moved";
 	case FocusLost: return "another window on the same monitor became active";
 	case WindowClosed: return "the window with the picture was closed";
+	case MonitorRemoved: return "the monitor with the picture is gone";
 	case UserStopped: return "the stop button of the toolbar was pressed";
 	case ModeSwitchRequested: return "the toolbar asked for the other way of scaling, which this tool does not do";
 	case CaptureFailed: return "capturing failed";

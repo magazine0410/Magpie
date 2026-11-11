@@ -23,11 +23,12 @@ cp "$BUILD/tests/magpie_test_window" /out/
 
 echo
 echo "################ the tests with Sway, on the software renderer ################"
-# No graphics card and no session here: Sway composes with pixman, Vulkan is
-# llvmpipe, and the runtime directory is one of the tests' own.
-export XDG_RUNTIME_DIR=/tmp/runtime
-mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
-export WLR_RENDERER=pixman
+# From the package files the image has kept
+dnf -y -C install sway > /out/sway-install.log 2>&1 || dnf -y install sway >> /out/sway-install.log 2>&1
+echo "sway: $(rpm -q sway)"
+# No graphics card and no session here: Sway composes in software, Vulkan is
+# llvmpipe, and the tests make runtime directories of their own. One test at
+# a time: the software renderer uses every processor core by itself.
 "$BUILD/tests/magpie_engine_tests" "[sway]" > /out/sway-tests.log 2>&1
 echo "magpie_engine_tests [sway]: exit status $?; $(tail -3 /out/sway-tests.log | tr '\n' ' ')"
 "$SOURCE/linux/tests/tools/sway_service_test.sh" "$BUILD" "$SOURCE/src/Effects" > /out/sway-service.log 2>&1

@@ -975,7 +975,8 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 		}
 		if (view.surface->IsClosed()) {
 			// A window is closed by the user, a layer surface by the desktop
-			_endReason = _options.IsWindowedMode() || _nested ? EndReason::WindowClosed : EndReason::Failed;
+			// when its output goes away
+			_endReason = _options.IsWindowedMode() || _nested ? EndReason::WindowClosed : EndReason::MonitorRemoved;
 			return false;
 		}
 	}
@@ -1936,6 +1937,33 @@ void ScalingSession::Stop() noexcept {
 	// Set if the window has another size than before scaling
 	std::optional<WindowPlacement> placeAgain;
 
+	// The monitors that are there now. The one the window came from may be
+	// gone, which is one of the reasons for scaling to end; the window then
+	// goes to another, where the user can reach it.
+	std::vector<OutputInfo> monitorsNow;
+	if (_isWindowMoved) {
+		for (const OutputInfo& output : _bridge->ListOutputs()) {
+			if (!output.isVirtual) {
+				monitorsNow.push_back(output);
+			}
+		}
+	}
+	const auto isOnMonitor = [&](const Rect& frame) {
+		return monitorsNow.empty() || std::ranges::any_of(monitorsNow, [&](const OutputInfo& monitor) {
+			return Overlaps(monitor.rect, frame);
+		});
+	};
+	// Into the first monitor, with its size and as near to its old place
+	// within the monitor as it fits
+	const auto moveOntoMonitor = [&](Rect& frame) {
+		const Rect& monitor = monitorsNow[0].rect;
+		const Size size{ frame.Width(), frame.Height() };
+		frame.left = monitor.left + std::max(0, std::min(monitor.Width() - size.width, (monitor.Width() - size.width) / 2));
+		frame.top = monitor.top + std::max(0, std::min(monitor.Height() - size.height, (monitor.Height() - size.height) / 2));
+		frame.right = frame.left + size.width;
+		frame.bottom = frame.top + size.height;
+	};
+
 	// The window goes back while the picture still covers the monitor, and
 	// before its output disappears
 	if (_isWindowMoved) {
@@ -1955,7 +1983,13 @@ void ScalingSession::Stop() noexcept {
 				if (info.isFullscreen == _original.isFullscreen && info.isMaximized == _original.isMaximized) {
 					placement.frameRect = _original.frameRect;
 				}
-				Logger::Get().Info("Putting the window back on " + _monitors[0].name);
+				if (!isOnMonitor(_original.frameRect)) {
+					// Its monitor is gone; where it ends up on the other is
+					// for the desktop to say
+					placement.output = monitorsNow[0].name;
+					placement.frameRect = {};
+				}
+				Logger::Get().Info("Putting the window back on " + placement.output);
 				_bridge->PlaceWindow(_windowId, placement);
 			} else {
 				// The place it had, with the size it has now: the window may
@@ -1963,6 +1997,10 @@ void ScalingSession::Stop() noexcept {
 				Rect frame = _original.frameRect;
 				frame.right += info.frameRect.Width() - _sourceRect.Width();
 				frame.bottom += info.frameRect.Height() - _sourceRect.Height();
+				if (!isOnMonitor(frame)) {
+					Logger::Get().Info("The monitor the window was on is gone; it goes to " + monitorsNow[0].name);
+					moveOntoMonitor(frame);
+				}
 				Logger::Get().Info(fmt::format("Putting the window back: it is {}x{}, and goes to {},{} with {}x{}",
 					info.frameRect.Width(), info.frameRect.Height(), frame.left, frame.top, frame.Width(), frame.Height()));
 				placement.frameRect = frame;

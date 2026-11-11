@@ -60,6 +60,9 @@ public:
 		FocusLost,
 		// The user closed the window of windowed scaling
 		WindowClosed,
+		// A monitor that showed the picture is gone: switched off, unplugged
+		// or disabled
+		MonitorRemoved,
 		// The user pressed the stop button of the toolbar
 		UserStopped,
 		// The user asked for the other way of scaling with the toolbar; the
