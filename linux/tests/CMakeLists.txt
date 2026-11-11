@@ -104,6 +104,13 @@ add_test(NAME sway-service
 	COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sway_service_test.sh ${CMAKE_BINARY_DIR} ${MAGPIE_EFFECTS_DIR})
 set_tests_properties(sway-service PROPERTIES LABELS gpu TIMEOUT 300 SKIP_RETURN_CODE 77)
 
+# The KWin back end, in a KWin that the script starts itself and that shows
+# nothing; see the script. It skips itself without the program
+# "kwin_wayland" or without a PipeWire session.
+add_test(NAME kwin-virtual
+	COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/kwin_virtual_test.sh ${CMAKE_BINARY_DIR} ${MAGPIE_EFFECTS_DIR})
+set_tests_properties(kwin-virtual PROPERTIES LABELS gpu TIMEOUT 300 SKIP_RETURN_CODE 77)
+
 # Every bundled effect in every combination of FP16 mode and inline parameters.
 # Takes about a minute on a twelve-thread machine.
 add_test(NAME effects-compile-all
