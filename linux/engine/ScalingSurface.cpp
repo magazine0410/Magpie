@@ -4,11 +4,14 @@
 #include <cstring>
 #include <linux/input-event-codes.h>
 #include <poll.h>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 #include "Logger.h"
+#include "pointer-constraints-unstable-v1-client-protocol.h"
+#include "relative-pointer-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
 // The generated header names a parameter "namespace", which is a keyword in C++
@@ -22,9 +25,15 @@ struct ScalingSurface::State {
 	struct Output {
 		wl_output* proxy = nullptr;
 		std::string name;
+		Size size;
+		// In thousandths of a hertz
+		int32_t refreshRate = 0;
 	};
 
 	~State() {
+		if (keymapFd >= 0) {
+			close(keymapFd);
+		}
 		// Closing the connection destroys everything that was created on it
 		if (display) {
 			wl_display_disconnect(display);
@@ -38,6 +47,14 @@ struct ScalingSurface::State {
 	zxdg_decoration_manager_v1* decorationManager = nullptr;
 	wl_seat* seat = nullptr;
 	wl_pointer* pointer = nullptr;
+	wl_keyboard* keyboard = nullptr;
+	zwp_pointer_constraints_v1* pointerConstraints = nullptr;
+	zwp_relative_pointer_manager_v1* relativePointerManager = nullptr;
+	zwp_relative_pointer_v1* relativePointer = nullptr;
+	zwp_locked_pointer_v1* lockedPointer = nullptr;
+	// The caller wants the pointer locked, and the desktop has locked it
+	bool isLockWanted = false;
+	bool isLocked = false;
 	wl_shm* shm = nullptr;
 	// The arrow of the desktop's cursor theme, loaded when it is first shown
 	wl_cursor_theme* cursorTheme = nullptr;
@@ -76,6 +93,41 @@ struct ScalingSurface::State {
 	Point pointerPos;
 	uint32_t pointerMotionCount = 0;
 	std::vector<PointerEvent> pointerEvents;
+	std::vector<KeyEvent> keyEvents;
+	bool hasKeyboardFocus = false;
+	// The newest keymap that the caller has not taken yet
+	int keymapFd = -1;
+	uint32_t keymapSize = 0;
+	// The output the surface was last told it is on
+	wl_output* currentOutput = nullptr;
+
+	// Asks for the lock or gives it back, as far as that is possible now
+	void ApplyLock(std::optional<Point> hint) noexcept {
+		if (isLockWanted) {
+			if (lockedPointer || !pointer || !surface || !pointerConstraints) {
+				return;
+			}
+			if (!relativePointer && relativePointerManager) {
+				relativePointer = zwp_relative_pointer_manager_v1_get_relative_pointer(relativePointerManager, pointer);
+				zwp_relative_pointer_v1_add_listener(relativePointer, &RELATIVE_POINTER_LISTENER, this);
+			}
+			// Persistent: it comes back by itself when the surface gets the
+			// pointer again after having lost it
+			lockedPointer = zwp_pointer_constraints_v1_lock_pointer(pointerConstraints, surface, pointer, nullptr,
+				ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+			zwp_locked_pointer_v1_add_listener(lockedPointer, &LOCKED_POINTER_LISTENER, this);
+		} else if (lockedPointer) {
+			if (hint) {
+				zwp_locked_pointer_v1_set_cursor_position_hint(lockedPointer,
+					wl_fixed_from_int(hint->x), wl_fixed_from_int(hint->y));
+				// A hint takes effect with the next commit of the surface
+				wl_surface_commit(surface);
+			}
+			zwp_locked_pointer_v1_destroy(lockedPointer);
+			lockedPointer = nullptr;
+			isLocked = false;
+		}
+	}
 
 	bool LoadCursor() noexcept {
 		if (cursorSurface) {
@@ -132,6 +184,9 @@ struct ScalingSurface::State {
 	}
 
 	bool Connect(const std::string& displayName) noexcept {
+		if (display) {
+			return true;
+		}
 		display = wl_display_connect(displayName.empty() ? nullptr : displayName.c_str());
 		if (!display) {
 			Logger::Get().Error("Cannot connect to a Wayland compositor");
@@ -170,11 +225,82 @@ struct ScalingSurface::State {
 	static constexpr wl_output_listener OUTPUT_LISTENER{
 		.geometry = [](void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t,
 			const char*, const char*, int32_t) {},
-		.mode = [](void*, wl_output*, uint32_t, int32_t, int32_t, int32_t) {},
+		.mode = [](void* data, wl_output*, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
+			if (flags & WL_OUTPUT_MODE_CURRENT) {
+				((Output*)data)->size = { width, height };
+				((Output*)data)->refreshRate = refresh;
+			}
+		},
 		.done = [](void*, wl_output*) {},
 		.scale = [](void*, wl_output*, int32_t) {},
 		.name = [](void* data, wl_output*, const char* name) { ((Output*)data)->name = name; },
 		.description = [](void*, wl_output*, const char*) {}
+	};
+
+	static constexpr wl_surface_listener SURFACE_LISTENER{
+		.enter = [](void* data, wl_surface*, wl_output* output) { ((State*)data)->currentOutput = output; },
+		.leave = [](void* data, wl_surface*, wl_output* output) {
+			State& state = *(State*)data;
+			if (state.currentOutput == output) {
+				state.currentOutput = nullptr;
+			}
+		},
+		.preferred_buffer_scale = [](void*, wl_surface*, int32_t) {},
+		.preferred_buffer_transform = [](void*, wl_surface*, uint32_t) {}
+	};
+
+	static constexpr zwp_relative_pointer_v1_listener RELATIVE_POINTER_LISTENER{
+		.relative_motion = [](void* data, zwp_relative_pointer_v1*, uint32_t, uint32_t,
+			wl_fixed_t, wl_fixed_t, wl_fixed_t dxUnaccelerated, wl_fixed_t dyUnaccelerated) {
+			State& state = *(State*)data;
+			if (!state.isLocked) {
+				return;
+			}
+			PointerEvent event{ PointerEvent::Type::RelativeMotion, state.pointerPos };
+			event.dx = wl_fixed_to_double(dxUnaccelerated);
+			event.dy = wl_fixed_to_double(dyUnaccelerated);
+			state.pointerEvents.push_back(event);
+		}
+	};
+
+	static constexpr zwp_locked_pointer_v1_listener LOCKED_POINTER_LISTENER{
+		.locked = [](void* data, zwp_locked_pointer_v1*) { ((State*)data)->isLocked = true; },
+		.unlocked = [](void* data, zwp_locked_pointer_v1*) { ((State*)data)->isLocked = false; }
+	};
+
+	static constexpr wl_keyboard_listener KEYBOARD_LISTENER{
+		.keymap = [](void* data, wl_keyboard*, uint32_t format, int32_t fd, uint32_t size) {
+			State& state = *(State*)data;
+			if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+				close(fd);
+				return;
+			}
+			if (state.keymapFd >= 0) {
+				close(state.keymapFd);
+			}
+			state.keymapFd = fd;
+			state.keymapSize = size;
+		},
+		.enter = [](void* data, wl_keyboard*, uint32_t, wl_surface*, wl_array*) {
+			State& state = *(State*)data;
+			state.hasKeyboardFocus = true;
+			state.keyEvents.push_back({ KeyEvent::Type::FocusIn });
+		},
+		.leave = [](void* data, wl_keyboard*, uint32_t, wl_surface*) {
+			State& state = *(State*)data;
+			state.hasKeyboardFocus = false;
+			state.keyEvents.push_back({ KeyEvent::Type::FocusOut });
+		},
+		.key = [](void* data, wl_keyboard*, uint32_t, uint32_t, uint32_t key, uint32_t keyState) {
+			((State*)data)->keyEvents.push_back({
+				keyState == WL_KEYBOARD_KEY_STATE_PRESSED ? KeyEvent::Type::KeyDown : KeyEvent::Type::KeyUp, key
+			});
+		},
+		.modifiers = [](void* data, wl_keyboard*, uint32_t, uint32_t depressed, uint32_t latched,
+			uint32_t locked, uint32_t group) {
+			((State*)data)->keyEvents.push_back({ KeyEvent::Type::Modifiers, 0, depressed, latched, locked, group });
+		},
+		.repeat_info = [](void*, wl_keyboard*, int32_t, int32_t) {}
 	};
 
 	static constexpr wl_pointer_listener POINTER_LISTENER{
@@ -205,21 +331,20 @@ struct ScalingSurface::State {
 			case BTN_LEFT: index = 0; break;
 			case BTN_RIGHT: index = 1; break;
 			case BTN_MIDDLE: index = 2; break;
-			default: return;
+			default: index = -1; break;
 			}
 			state.pointerEvents.push_back({
 				buttonState == WL_POINTER_BUTTON_STATE_PRESSED ?
 					PointerEvent::Type::ButtonDown : PointerEvent::Type::ButtonUp,
-				state.pointerPos, index
+				state.pointerPos, index, 0.0f, button
 			});
 		},
 		.axis = [](void* data, wl_pointer*, uint32_t, uint32_t axis, wl_fixed_t value) {
 			State& state = *(State*)data;
-			if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
-				state.pointerEvents.push_back({
-					PointerEvent::Type::Scroll, state.pointerPos, 0, (float)wl_fixed_to_double(value)
-				});
-			}
+			state.pointerEvents.push_back({
+				PointerEvent::Type::Scroll, state.pointerPos, 0, (float)wl_fixed_to_double(value), 0,
+				axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL
+			});
 		},
 		.frame = [](void*, wl_pointer*) {},
 		.axis_source = [](void*, wl_pointer*, uint32_t) {},
@@ -299,6 +424,12 @@ struct ScalingSurface::State {
 			if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && !state.pointer) {
 				state.pointer = wl_seat_get_pointer(seat);
 				wl_pointer_add_listener(state.pointer, &POINTER_LISTENER, &state);
+				// A lock that was asked for before there was a pointer
+				state.ApplyLock(std::nullopt);
+			}
+			if ((capabilities & WL_SEAT_CAPABILITY_KEYBOARD) && !state.keyboard) {
+				state.keyboard = wl_seat_get_keyboard(seat);
+				wl_keyboard_add_listener(state.keyboard, &KEYBOARD_LISTENER, &state);
 			}
 		},
 		.name = [](void*, wl_seat*, const char*) {}
@@ -324,6 +455,12 @@ struct ScalingSurface::State {
 				// Version 5 has the frame event, which ends the listener above
 				state.seat = (wl_seat*)wl_registry_bind(registry, name, &wl_seat_interface, std::min(version, 5u));
 				wl_seat_add_listener(state.seat, &SEAT_LISTENER, &state);
+			} else if (std::strcmp(interface, zwp_pointer_constraints_v1_interface.name) == 0) {
+				state.pointerConstraints = (zwp_pointer_constraints_v1*)wl_registry_bind(
+					registry, name, &zwp_pointer_constraints_v1_interface, 1);
+			} else if (std::strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0) {
+				state.relativePointerManager = (zwp_relative_pointer_manager_v1*)wl_registry_bind(
+					registry, name, &zwp_relative_pointer_manager_v1_interface, 1);
 			} else if (std::strcmp(interface, wl_output_interface.name) == 0 && version >= 4) {
 				auto output = std::make_unique<Output>();
 				output->proxy = (wl_output*)wl_registry_bind(registry, name, &wl_output_interface, 4);
@@ -351,6 +488,20 @@ ScalingSurface::ScalingSurface() noexcept : _state(std::make_unique<State>()) {}
 
 ScalingSurface::~ScalingSurface() = default;
 
+bool ScalingSurface::Connect(const std::string& displayName) noexcept {
+	return _state->Connect(displayName);
+}
+
+Size ScalingSurface::LargestOutputSize() const noexcept {
+	Size largest;
+	for (const std::unique_ptr<State::Output>& output : _state->outputs) {
+		if ((int64_t)output->size.width * output->size.height > (int64_t)largest.width * largest.height) {
+			largest = output->size;
+		}
+	}
+	return largest;
+}
+
 bool ScalingSurface::CreateLayer(
 	const std::string& displayName,
 	const std::string& outputName,
@@ -377,6 +528,7 @@ bool ScalingSurface::CreateLayer(
 	}
 
 	state.surface = wl_compositor_create_surface(state.compositor);
+	wl_surface_add_listener(state.surface, &State::SURFACE_LISTENER, &state);
 	state.layerSurface = zwlr_layer_shell_v1_get_layer_surface(state.layerShell, state.surface, output,
 		aboveEverything ? ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY : ZWLR_LAYER_SHELL_V1_LAYER_TOP, "magpie-scaling");
 	zwlr_layer_surface_v1_add_listener(state.layerSurface, &State::LAYER_SURFACE_LISTENER, &state);
@@ -400,7 +552,8 @@ bool ScalingSurface::CreateWindow(
 	Size size,
 	Size minSize,
 	SizeRule sizeRule,
-	bool startsFixed
+	bool startsFixed,
+	bool isFullscreen
 ) noexcept {
 	State& state = *_state;
 	if (!state.Connect(displayName)) {
@@ -415,6 +568,7 @@ bool ScalingSurface::CreateWindow(
 	state.sizeRule = std::move(sizeRule);
 
 	state.surface = wl_compositor_create_surface(state.compositor);
+	wl_surface_add_listener(state.surface, &State::SURFACE_LISTENER, &state);
 	state.xdgSurface = xdg_wm_base_get_xdg_surface(state.wmBase, state.surface);
 	xdg_surface_add_listener(state.xdgSurface, &State::XDG_SURFACE_LISTENER, &state);
 	state.toplevel = xdg_surface_get_toplevel(state.xdgSurface);
@@ -428,6 +582,12 @@ bool ScalingSurface::CreateWindow(
 		state.isFixedSizeHeld = true;
 	} else {
 		xdg_toplevel_set_min_size(state.toplevel, minSize.width, minSize.height);
+	}
+
+	if (isFullscreen) {
+		// On the monitor the desktop chooses; its size comes with the
+		// first configure event
+		xdg_toplevel_set_fullscreen(state.toplevel, nullptr);
 	}
 
 	if (state.decorationManager) {
@@ -510,6 +670,46 @@ uint32_t ScalingSurface::PointerMotionCount() const noexcept {
 
 std::vector<ScalingSurface::PointerEvent> ScalingSurface::TakePointerEvents() noexcept {
 	return std::exchange(_state->pointerEvents, {});
+}
+
+std::vector<ScalingSurface::KeyEvent> ScalingSurface::TakeKeyEvents() noexcept {
+	return std::exchange(_state->keyEvents, {});
+}
+
+bool ScalingSurface::HasKeyboardFocus() const noexcept {
+	return _state->hasKeyboardFocus;
+}
+
+bool ScalingSurface::TakeKeymap(int& fd, uint32_t& size) noexcept {
+	if (_state->keymapFd < 0) {
+		return false;
+	}
+	fd = std::exchange(_state->keymapFd, -1);
+	size = _state->keymapSize;
+	return true;
+}
+
+void ScalingSurface::SetPointerLocked(bool isLocked, std::optional<Point> hint) noexcept {
+	State& state = *_state;
+	if (state.isLockWanted == isLocked) {
+		return;
+	}
+	state.isLockWanted = isLocked;
+	state.ApplyLock(hint);
+	wl_display_flush(state.display);
+}
+
+bool ScalingSurface::IsPointerLocked() const noexcept {
+	return _state->isLocked;
+}
+
+int32_t ScalingSurface::OutputRefreshRate() const noexcept {
+	for (const std::unique_ptr<State::Output>& output : _state->outputs) {
+		if (output->proxy == _state->currentOutput) {
+			return output->refreshRate;
+		}
+	}
+	return 0;
 }
 
 bool ScalingSurface::IsPointerInside() const noexcept {

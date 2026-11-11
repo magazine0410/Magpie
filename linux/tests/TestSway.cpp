@@ -10,9 +10,11 @@
 #include <xkbcommon/xkbcommon.h>
 #include "FrameSource.h"
 #include "ImageCopyFrameSource.h"
+#include "NestedCompositor.h"
 #include "RenderTestHelpers.h"
 #include "ScalingSession.h"
 #include "SwayBridge.h"
+#include "SwayIpc.h"
 #include "SwayJson.h"
 #include "SwayTestHelpers.h"
 #include "WlrInput.h"
@@ -1229,6 +1231,286 @@ TEST_CASE("The pointer leaves a fullscreen picture on Sway towards another monit
 	const SwayWindow after = fixture.Find("source");
 	CHECK(after.output == "HEADLESS-1");
 	CHECK(after.info.frameRect == before.info.frameRect);
+}
+
+namespace {
+
+// A nested session inside the Sway of the test, with the test window as the
+// program. What the program's window gets from pointer and keyboard, it
+// writes to a file.
+struct NestedFixture : SessionFixture {
+	bool StartCompositor(Size size) {
+		std::string error;
+		const bool started = nested.Start({
+			.size = size,
+			.refreshRate = 60'000,
+			.parentDirectory = sway->Dir()
+		}, error);
+		INFO(error);
+		return started;
+	}
+
+	// `arguments` as a shell takes them, for example "--title game --resizable"
+	void LaunchWindow(const std::string& arguments) {
+		eventsFile = sway->Dir() / "nested-events.log";
+		REQUIRE(nested.Launch({ "sh", "-c", std::string("exec '") + MAGPIE_TEST_WINDOW_PROGRAM + "' " + arguments +
+			" > '" + eventsFile.string() + "'" }));
+		const auto deadline = steady_clock::now() + 5s;
+		while (nested.Bridge().ListWindows().empty()) {
+			REQUIRE(steady_clock::now() < deadline);
+			std::this_thread::sleep_for(20ms);
+		}
+	}
+
+	// The lines the program has written so far
+	std::vector<std::string> Events() const {
+		std::vector<std::string> lines;
+		std::ifstream file(eventsFile);
+		for (std::string line; std::getline(file, line);) {
+			lines.push_back(line);
+		}
+		return lines;
+	}
+
+	// The last line that begins with `prefix`; empty if there is none
+	std::string LastEvent(std::string_view prefix) const {
+		std::string last;
+		for (const std::string& line : Events()) {
+			if (line.starts_with(prefix)) {
+				last = line;
+			}
+		}
+		return last;
+	}
+
+	// Where the program's window last saw the pointer
+	std::optional<Point> ProgramPointer() const {
+		std::optional<Point> pos;
+		for (const std::string& line : Events()) {
+			int x, y;
+			if (std::sscanf(line.c_str(), "motion %d %d", &x, &y) == 2 || std::sscanf(line.c_str(), "enter %d %d", &x, &y) == 2) {
+				pos = Point{ x, y };
+			}
+		}
+		return pos;
+	}
+
+	~NestedFixture() {
+		session.Stop();
+		monitor.reset();
+		nested.Stop();
+	}
+
+	NestedCompositor nested;
+	std::filesystem::path eventsFile;
+};
+
+}
+
+TEST_CASE("A program is scaled in a nested session", "[sway][desktop][session][nested]") {
+	NestedFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& host = fixture.bridge;
+	ScalingSession& session = fixture.session;
+	NestedCompositor& nested = fixture.nested;
+	REQUIRE_FALSE(RenderTest::TestDevices().empty());
+	VulkanDevice& device = *RenderTest::TestDevices()[0].device;
+	REQUIRE(NestedCompositor::IsAvailable());
+	fixture.config.hostDisplay = fixture.sway->WaylandDisplay();
+	// The pointer of the desktop exists before the picture's window looks for it
+	REQUIRE(host.MovePointer({ 1900, 1000 }));
+
+	const Size size{ 640, 480 };
+	REQUIRE(fixture.StartCompositor(size));
+	CHECK(nested.OutputSize() == size);
+	CHECK(nested.IsRunning());
+	// A window that can be resized fills the output of the session
+	fixture.LaunchWindow("--title game --resizable");
+	REQUIRE(fixture.WaitFor([&] {
+		nested.Bridge().ListWindows();
+		return !nested.Bridge().Windows().empty() &&
+			nested.Bridge().Windows()[0].info.frameRect == Rect{ 0, 0, 640, 480 };
+	}));
+	// It is a window of that compositor, not of the desktop
+	CHECK(host.ListWindows().empty());
+
+	REQUIRE(session.StartNested(nested, fixture.options, fixture.config) == ScalingError::NoError);
+	CHECK(session.IsNested());
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// On the desktop there is one window of Magpie, which covers the monitor
+	// and has the title of the program
+	const SwayWindow picture = fixture.Find("game");
+	CHECK(picture.info.pid == (uint32_t)getpid());
+	CHECK(picture.info.isFullscreen);
+	CHECK(picture.output == "HEADLESS-1");
+	// Once the desktop has given the window the size of the monitor
+	CHECK(fixture.StepUntil([&] { return session.DestinationRect() == Rect{ 240, 0, 1680, 1080 }; }));
+	CHECK(session.SourceRect() == Rect{ 0, 0, 640, 480 });
+
+	SECTION("the monitor shows the program's picture") {
+		CHECK(IsNear(fixture.MonitorPixel(device, { 100, 500 }), { 0, 0, 0 }));
+		for (const Point pt : { Point{ 160, 120 }, Point{ 480, 120 }, Point{ 160, 360 }, Point{ 480, 360 } }) {
+			const Point onMonitor{ 240 + pt.x * 1440 / 640, pt.y * 1080 / 480 };
+			INFO("the window's " << pt.x << "," << pt.y << " at " << onMonitor.x << "," << onMonitor.y);
+			CHECK(IsNear(fixture.MonitorPixel(device, onMonitor), TestWindow::ColorAt(size, pt.x, pt.y)));
+		}
+	}
+
+	SECTION("pointer and keyboard reach the program") {
+		// The pointer on the picture is the pointer at the place of the
+		// program that the picture shows there
+		REQUIRE(host.MovePointer({ 240 + 720, 540 }));
+		REQUIRE(fixture.StepUntil([&] { return fixture.ProgramPointer().has_value(); }));
+		REQUIRE(fixture.StepUntil([&] {
+			const Point pos = *fixture.ProgramPointer();
+			return std::abs(pos.x - 320) <= 1 && std::abs(pos.y - 240) <= 1;
+		}));
+		REQUIRE(host.MovePointer({ 240 + 360, 270 }));
+		REQUIRE(fixture.StepUntil([&] {
+			const Point pos = *fixture.ProgramPointer();
+			return std::abs(pos.x - 160) <= 1 && std::abs(pos.y - 120) <= 1;
+		}));
+		// Beside the picture it stays at the edge
+		REQUIRE(host.MovePointer({ 100, 540 }));
+		REQUIRE(fixture.StepUntil([&] { return fixture.ProgramPointer()->x == 0; }));
+
+		// The cursor that the program chose is drawn on the picture
+		REQUIRE(host.MovePointer({ 240 + 720, 540 }));
+		REQUIRE(fixture.StepUntil([&] {
+			return IsNear(fixture.MonitorPixel(device, { 240 + 720 + 10, 540 + 10 }),
+				{ TestWindow::CURSOR_RGBA[0], TestWindow::CURSOR_RGBA[1], TestWindow::CURSOR_RGBA[2] });
+		}));
+
+		host.Input().Button(BTN_LEFT, true);
+		host.Input().Button(BTN_LEFT, false);
+		host.Input().Flush();
+		REQUIRE(fixture.StepUntil([&] { return fixture.LastEvent("button 272 up") != ""; }));
+		int x = 0, y = 0;
+		REQUIRE(std::sscanf(fixture.LastEvent("button 272 down").c_str(), "button 272 down %d %d", &x, &y) == 2);
+		CHECK(std::abs(x - 320) <= 1);
+		CHECK(std::abs(y - 240) <= 1);
+
+		// The window of the picture has the keyboard of the desktop, and the
+		// program gets what is typed
+		WlrInput keyboard;
+		REQUIRE(keyboard.Connect(fixture.sway->WaylandDisplay()));
+		uint32_t keymapSize = 0;
+		const int keymap = CreateKeymapFile(keymapSize);
+		REQUIRE(keymap >= 0);
+		keyboard.SetKeymap(keymap, keymapSize);
+		close(keymap);
+		keyboard.Flush();
+		REQUIRE(fixture.StepUntil([&] { return session.IsSourceActive(); }));
+		// The program learns of the keyboard a moment after Magpie has
+		// passed the keymap on; nobody types that fast
+		fixture.StepUntil([] { return false; }, 300ms);
+		keyboard.Key(KEY_M, true);
+		keyboard.Key(KEY_M, false);
+		keyboard.Flush();
+		REQUIRE(fixture.StepUntil([&] { return fixture.LastEvent("key 50 up") != ""; }));
+		CHECK(fixture.LastEvent("key 50 down") != "");
+
+		// A key that is held when the desktop takes the keyboard away is
+		// released for the program
+		keyboard.Key(KEY_Z, true);
+		keyboard.Flush();
+		REQUIRE(fixture.StepUntil([&] { return fixture.LastEvent("key 44 down") != ""; }));
+		// Another workspace: the picture's window is not shown and has the
+		// keyboard no longer
+		REQUIRE(fixture.sway->Command("workspace 9"));
+		REQUIRE(fixture.StepUntil([&] { return fixture.LastEvent("key 44 up") != ""; }));
+		CHECK_FALSE(session.IsSourceActive());
+	}
+
+	SECTION("stopping leaves the program running, for another way of scaling") {
+		session.Stop();
+		CHECK(nested.IsRunning());
+		CHECK(nested.Bridge().ListWindows().size() == 1);
+		REQUIRE(fixture.WaitFor([&] { return FindByTitle((host.ListWindows(), host.Windows()), "game") == nullptr; }));
+
+		// Into a window this time
+		ScalingSession windowed;
+		fixture.options.flags |= ScalingFlags::WindowedMode;
+		fixture.options.initialWindowedScaleFactor = 1.5f;
+		REQUIRE(windowed.StartNested(nested, fixture.options, fixture.config) == ScalingError::NoError);
+		const SwayWindow picture2 = fixture.Find("game");
+		CHECK_FALSE(picture2.info.isFullscreen);
+		CHECK(windowed.DestinationRect().Width() * 3 == windowed.DestinationRect().Height() * 4);
+		windowed.Stop();
+	}
+
+	SECTION("the session ends when the program closes its window") {
+		nested.Bridge().Ipc().Command("[title=\"game\"] kill");
+		CHECK_FALSE(fixture.StepUntil([] { return false; }, 6s));
+		CHECK(session.GetEndReason() == ScalingSession::EndReason::SourceClosed);
+	}
+
+	SECTION("closing the picture's window ends the session") {
+		fixture.sway->Command("[con_id=" + picture.info.id + "] kill");
+		CHECK_FALSE(fixture.StepUntil([] { return false; }, 3s));
+		CHECK(session.GetEndReason() == ScalingSession::EndReason::WindowClosed);
+	}
+}
+
+TEST_CASE("A nested session takes the size of a window that cannot be resized", "[sway][desktop][session][nested]") {
+	NestedFixture fixture;
+	REQUIRE_SWAY(fixture);
+	ScalingSession& session = fixture.session;
+	NestedCompositor& nested = fixture.nested;
+	REQUIRE_FALSE(RenderTest::TestDevices().empty());
+	VulkanDevice& device = *RenderTest::TestDevices()[0].device;
+	fixture.config.hostDisplay = fixture.sway->WaylandDisplay();
+	REQUIRE(fixture.bridge.MovePointer({ 1900, 1000 }));
+
+	// The session offers more than the program takes
+	REQUIRE(fixture.StartCompositor({ 1280, 720 }));
+	fixture.LaunchWindow("--title fixed --size 320x240");
+	REQUIRE(session.StartNested(nested, fixture.options, fixture.config) == ScalingError::NoError);
+	CHECK(session.SourceRect() == Rect{ 0, 0, 1280, 720 });
+
+	REQUIRE(fixture.StepUntil([&] { return session.SourceRect() == Rect{ 0, 0, 320, 240 }; }));
+	CHECK(nested.OutputSize() == Size{ 320, 240 });
+	// The window fills the picture: 320x240 to 1440x1080
+	REQUIRE(fixture.StepUntil([&] { return session.DestinationRect() == Rect{ 240, 0, 1680, 1080 }; }));
+	const Size size{ 320, 240 };
+	for (const Point pt : { Point{ 80, 60 }, Point{ 240, 60 }, Point{ 80, 180 }, Point{ 240, 180 } }) {
+		const Point onMonitor{ 240 + pt.x * 1440 / 320, pt.y * 1080 / 240 };
+		INFO("the window's " << pt.x << "," << pt.y << " at " << onMonitor.x << "," << onMonitor.y);
+		CHECK(IsNear(fixture.MonitorPixel(device, onMonitor), TestWindow::ColorAt(size, pt.x, pt.y)));
+	}
+}
+
+TEST_CASE("A nested session passes the mouse's movement on while the program hides the cursor", "[sway][desktop][session][nested]") {
+	NestedFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& host = fixture.bridge;
+	ScalingSession& session = fixture.session;
+	fixture.config.hostDisplay = fixture.sway->WaylandDisplay();
+	REQUIRE(host.MovePointer({ 1900, 1000 }));
+
+	REQUIRE(fixture.StartCompositor({ 640, 480 }));
+	fixture.LaunchWindow("--title game --resizable --hide-cursor");
+	REQUIRE(session.StartNested(fixture.nested, fixture.options, fixture.config) == ScalingError::NoError);
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// Onto the picture: the program has the pointer in its middle
+	REQUIRE(host.MovePointer({ 240 + 720, 540 }));
+	REQUIRE(fixture.StepUntil([&] {
+		const std::optional<Point> pos = fixture.ProgramPointer();
+		return pos && std::abs(pos->x - 320) <= 1 && std::abs(pos->y - 240) <= 1;
+	}));
+	// After a moment without a cursor the pointer of the desktop is held
+	fixture.StepUntil([] { return false; }, 1200ms);
+
+	// A movement of the mouse then arrives as it is, not enlarged like the
+	// picture: 45 pixels on the picture would be 20 for the program
+	host.Input().MoveRelative(45, -30);
+	host.Input().Flush();
+	REQUIRE(fixture.StepUntil([&] {
+		const Point pos = *fixture.ProgramPointer();
+		return std::abs(pos.x - 365) <= 1 && std::abs(pos.y - 210) <= 1;
+	}));
 }
 
 TEST_CASE("What a scaling session on Sway left behind is undone", "[sway][desktop][session]") {

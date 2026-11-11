@@ -23,6 +23,10 @@ foreach(xml IN ITEMS
 	${WAYLAND_PROTOCOLS_DIR}/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml
 	${WAYLAND_PROTOCOLS_DIR}/staging/ext-image-capture-source/ext-image-capture-source-v1.xml
 	${WAYLAND_PROTOCOLS_DIR}/staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml
+	# The nested session: the pointer held in place, and how far it would
+	# have moved
+	${WAYLAND_PROTOCOLS_DIR}/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml
+	${WAYLAND_PROTOCOLS_DIR}/unstable/relative-pointer/relative-pointer-unstable-v1.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)

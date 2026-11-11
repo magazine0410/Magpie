@@ -37,6 +37,7 @@ add_library(magpie_bridge STATIC
 	DesktopNotification.cpp
 	KWinBridge.cpp
 	KWinPointerSpeed.cpp
+	NestedCompositor.cpp
 	PortalCapture.cpp
 	PortalRequest.cpp
 	PortalShortcuts.cpp

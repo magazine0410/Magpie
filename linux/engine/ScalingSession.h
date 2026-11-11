@@ -6,6 +6,12 @@
 // clicks reach the source at the right place, and the keyboard stays with the
 // source because the picture never keeps the focus.
 //
+// A second way, the nested session, serves where the desktop has no back end
+// or the program is started for it: the program runs in a compositor of
+// Magpie's own (NestedCompositor), the whole output of that compositor is the
+// source, and the picture is in an ordinary window, fullscreen or not, which
+// has the keyboard and the pointer and passes them on.
+//
 // Linux counterpart of ScalingWindow, SrcTracker and the capture logic of
 // CursorManager in src/Magpie.Core.
 #pragma once
@@ -33,6 +39,8 @@
 #include "VulkanDevice.h"
 
 namespace Magpie {
+
+class NestedCompositor;
 
 class ScalingSession {
 public:
@@ -82,6 +90,10 @@ public:
 		// The width the picture of the last windowed scaling had, to start
 		// with it again; zero: the size comes from the options
 		int32_t lastWindowedWidth = 0;
+		// Nested session: the name of the socket of the desktop's
+		// compositor, on which the picture is shown; empty for the
+		// compositor of the session
+		std::string hostDisplay;
 	};
 
 	struct Statistics {
@@ -165,6 +177,21 @@ public:
 		const ScalingOptions& options,
 		const Config& config
 	) noexcept;
+
+	// Shows what a nested session's compositor has on its output: scaled, in
+	// a window on the desktop that covers a monitor, or in an ordinary one in
+	// windowed mode. Keyboard and pointer go from that window to the
+	// compositor. The compositor has to stay alive as long as the session;
+	// stopping the session leaves it running.
+	ScalingError StartNested(
+		NestedCompositor& nested,
+		const ScalingOptions& options,
+		const Config& config
+	) noexcept;
+
+	bool IsNested() const noexcept {
+		return _nested != nullptr;
+	}
 
 	// Waits until there is something to do, at most until one of `wakeFds`
 	// becomes readable, and does it: a new frame, the pointer, a change of
@@ -250,6 +277,23 @@ private:
 
 	bool _PrepareDesktop(ScalingError& error) noexcept;
 
+	// What Start and StartNested have in common, once the source is where
+	// it is captured: the renderer, the surfaces, the first frame
+	ScalingError _StartScaling() noexcept;
+
+	// Nested session: follows the program's windows and the size of its
+	// output. False when scaling has to end; sets _endReason.
+	bool _TrackNested() noexcept;
+
+	// Nested session: takes the output's size as the size of the source
+	bool _SetNestedSourceSize(Size size) noexcept;
+
+	// Nested session: passes keyboard and pointer on to the compositor
+	void _ForwardInput(const Rect& destRect) noexcept;
+
+	// Nested session: lets go of every key and button that is held there
+	void _ReleaseNestedInput() noexcept;
+
 	bool _CreateViews(ScalingError& error) noexcept;
 
 	bool _AddView(std::unique_ptr<ScalingSurface> surface, const Rect& rect) noexcept;
@@ -306,8 +350,10 @@ private:
 	// The device is declared first, so that it is destroyed last
 	VulkanDevice _device;
 
+	// The desktop; in a nested session the compositor of that session
 	DesktopBridge* _bridge = nullptr;
 	DesktopBridge::Traits _traits;
+	NestedCompositor* _nested = nullptr;
 	ScalingOptions _options;
 	Config _config;
 
@@ -391,6 +437,26 @@ private:
 	// the speed is not to be adjusted
 	std::vector<PointerDevice> _pointerDevices;
 	bool _isPointerSlowed = false;
+
+	// What the pointer did on the surfaces since the last step
+	std::vector<ScalingSurface::PointerEvent> _pointerEvents;
+
+	// Nested session: the keys and buttons that are down in the compositor
+	std::vector<uint32_t> _pressedKeys;
+	std::vector<uint32_t> _pressedButtons;
+	// The pointer is locked on the picture and its movement is passed on
+	// as it is, for a program that hides the cursor
+	bool _isRelativeMode = false;
+	// Since when the program shows no cursor
+	std::optional<std::chrono::steady_clock::time_point> _cursorHiddenSince;
+	std::chrono::steady_clock::time_point _startTime;
+	// Since when the compositor has no window, after it had one
+	std::optional<std::chrono::steady_clock::time_point> _noWindowSince;
+	bool _hadNestedWindow = false;
+	// A window of a fixed size that the output is to take the size of, and
+	// since when it has that size
+	Size _fitSize;
+	std::chrono::steady_clock::time_point _fitSince;
 
 	// Writes the last screenshot to its file
 	std::jthread _screenshotThread;

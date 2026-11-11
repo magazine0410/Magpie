@@ -9,9 +9,12 @@
 #include <unistd.h>
 #include <fmt/format.h>
 #include "Logger.h"
+#include "NestedCompositor.h"
 #include "ProcessInfo.h"
 #include "ScalingGeometry.h"
 #include "Screenshot.h"
+#include "SwayIpc.h"
+#include "WlrInput.h"
 
 using namespace std::chrono;
 
@@ -179,17 +182,78 @@ ScalingError ScalingSession::Start(
 		return error;
 	}
 
+	return _StartScaling();
+}
+
+ScalingError ScalingSession::StartNested(
+	NestedCompositor& nested,
+	const ScalingOptions& options,
+	const Config& config
+) noexcept {
+	if (options.effects.empty()) {
+		return ScalingError::InvalidScalingMode;
+	}
+	if (options.IsWindowedMode() && options.Is3DGameMode()) {
+		return ScalingError::Windowed3DGameMode;
+	}
+
+	_nested = &nested;
+	_bridge = &nested.Bridge();
+	_traits = _bridge->GetTraits();
+	_traits.captureMethod = "Nested session";
+	_traits.canMinimize = false;
+	_options = options;
+	_config = config;
+	_config.validation = config.validation || options.IsDebugMode();
+	_options.Prepare();
+
+	// The whole output of the compositor is the source: no strip around it,
+	// and nothing to move
+	if (!_SetNestedSourceSize(nested.OutputSize())) {
+		Stop();
+		return ScalingError::InvalidCropping;
+	}
+	_virtualOutputName = NestedCompositor::OUTPUT_NAME;
+	_refreshRate = nested.RefreshRate();
+	_capture = nested.Bridge().CaptureOutput(NestedCompositor::OUTPUT_NAME);
+
+	// The program may have a window already; it gives the picture its title
+	nested.Bridge().ListWindows();
+	if (!nested.Bridge().Windows().empty()) {
+		_original = nested.Bridge().Windows()[0].info;
+		_windowId = _original.id;
+		_hadNestedWindow = true;
+	}
+
+	return _StartScaling();
+}
+
+bool ScalingSession::_SetNestedSourceSize(Size size) noexcept {
+	Rect cropped{ 0, 0, size.width, size.height };
+	if (size.width < ScalingGeometry::MIN_SRC_SIZE || size.height < ScalingGeometry::MIN_SRC_SIZE ||
+		!ScalingGeometry::CropSourceRect(cropped, _options.cropping)) {
+		return false;
+	}
+	_srcSize = { cropped.Width(), cropped.Height() };
+	_virtualOutputRect = { 0, 0, size.width, size.height };
+	_sourceRect = _virtualOutputRect;
+	_pointerRect = _virtualOutputRect;
+	_minWindowedSize = _srcSize;
+	return true;
+}
+
+ScalingError ScalingSession::_StartScaling() noexcept {
 	// From here on every failure is one of initialisation
 	const auto fail = [&](ScalingError result) {
 		Stop();
 		return result;
 	};
 
-	if (!_device.Initialize({ options.graphicsCardId, _config.validation, true })) {
+	if (!_device.Initialize({ _options.graphicsCardId, _config.validation, true })) {
 		return fail(ScalingError::ScalingFailedGeneral);
 	}
 
-	error = ScalingError::ScalingFailedGeneral;
+	ScalingError error = ScalingError::ScalingFailedGeneral;
 	if (!_CreateViews(error)) {
 		return fail(error);
 	}
@@ -212,7 +276,7 @@ ScalingError ScalingSession::Start(
 	}
 
 	_chain = std::make_unique<EffectChain>();
-	if (!_chain->Initialize(_device, _options, { config.effectsDir, _RendererSize() }, _frameSource->Output())) {
+	if (!_chain->Initialize(_device, _options, { _config.effectsDir, _RendererSize() }, _frameSource->Output())) {
 		return fail(ScalingError::ScalingFailedGeneral);
 	}
 	_chainInput = _frameSource->Output();
@@ -227,7 +291,7 @@ ScalingError ScalingSession::Start(
 	if (!_options.Is3DGameMode()) {
 		_overlay = std::make_unique<OverlayDrawer>();
 		if (_overlay->Initialize(_device, _views[0].swapchain->Format(), {
-			.iconFontPath = config.iconFontPath,
+			.iconFontPath = _config.iconFontPath,
 			.captureMethod = _traits.captureMethod,
 			.isWindowedMode = _options.IsWindowedMode(),
 			.isDeveloperMode = _options.IsDeveloperMode(),
@@ -262,19 +326,20 @@ ScalingError ScalingSession::Start(
 			_inhibitor->KeepScreenOn("A window is scaled");
 		}
 		if (_options.IsSimulateExclusiveFullscreen()) {
-			_inhibitor->SuppressNotifications(config.appId, "A window is scaled to fullscreen");
+			_inhibitor->SuppressNotifications(_config.appId, "A window is scaled to fullscreen");
 		}
 	}
 
 	_isRunning = true;
 	_isSourceActive = true;
+	_startTime = steady_clock::now();
 	// A window that changes its size is to be noticed on every desktop
 	_bridge->SetWatching(true);
 
 	if (_options.IsWindowedMode()) {
 		// The window appears with its first frame, and only then can it be
-		// given its place
-		if (!_Render(true) || !_PlaceOwnWindow()) {
+		// given its place. In a nested session the desktop places it.
+		if (!_Render(true) || (!_nested && !_PlaceOwnWindow())) {
 			return fail(ScalingError::ScalingFailedGeneral);
 		}
 	} else {
@@ -282,7 +347,7 @@ ScalingError ScalingSession::Start(
 		_hasNewFrame = true;
 	}
 
-	if (_options.Is3DGameMode()) {
+	if (_options.Is3DGameMode() && !_nested) {
 		// The pointer belongs to the source from the start, wherever it is,
 		// as CursorManager does in this mode
 		_bridge->MovePointer({
@@ -551,6 +616,44 @@ bool ScalingSession::_AddView(std::unique_ptr<ScalingSurface> surface, const Rec
 }
 
 bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
+	if (_nested) {
+		// One window on the desktop, which the desktop places: one that
+		// covers a monitor, or in windowed mode one with the aspect ratio of
+		// the source
+		auto surface = std::make_unique<ScalingSurface>();
+		if (!surface->Connect(_config.hostDisplay)) {
+			return false;
+		}
+		_maxWindowedSize = { 16384, 16384 };
+		Size size = _srcSize;
+		if (_options.IsWindowedMode()) {
+			Size monitor = surface->LargestOutputSize();
+			if (monitor.width <= 0 || monitor.height <= 0) {
+				monitor = { 1920, 1080 };
+			}
+			if (!ScalingGeometry::CalcInitialWindowedRendererSize(size, _srcSize, monitor,
+				_options.initialWindowedScaleFactor, _config.lastWindowedWidth, _minWindowedSize, _maxWindowedSize)) {
+				error = ScalingError::InvalidSourceWindow;
+				return false;
+			}
+		}
+		if (!surface->CreateWindow(_config.hostDisplay, _original.title.empty() ? "Magpie" : _original.title,
+			_config.appId, size, _minWindowedSize,
+			[this](Size proposed, bool isWidthChanged, bool isHeightChanged) {
+				return ScalingGeometry::CalcResizedWindowedRendererSize(
+					proposed, isWidthChanged, isHeightChanged, _srcSize, _minWindowedSize, _maxWindowedSize);
+			}, false, !_options.IsWindowedMode())) {
+			return false;
+		}
+		// The size the desktop gave a fullscreen window is that of its monitor
+		const Size actual = surface->GetSize();
+		_rendererRect = { 0, 0, actual.width, actual.height };
+		if (_options.IsWindowedMode()) {
+			_windowedWidth = actual.width;
+		}
+		return _AddView(std::move(surface), _rendererRect);
+	}
+
 	if (!_options.IsWindowedMode()) {
 		// One surface per monitor; together they show one picture
 		for (const OutputInfo& monitor : _monitors) {
@@ -796,7 +899,7 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 		}
 		if (view.surface->IsClosed()) {
 			// A window is closed by the user, a layer surface by the desktop
-			_endReason = _options.IsWindowedMode() ? EndReason::WindowClosed : EndReason::Failed;
+			_endReason = _options.IsWindowedMode() || _nested ? EndReason::WindowClosed : EndReason::Failed;
 			return false;
 		}
 	}
@@ -808,11 +911,17 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 		_endReason = EndReason::CaptureFailed;
 		return false;
 	}
-	if (_options.IsWindowedMode() && !_TrackOwnWindow()) {
-		return false;
-	}
-	if (!_TrackSource()) {
-		return false;
+	if (_nested) {
+		if (!_TrackNested()) {
+			return false;
+		}
+	} else {
+		if (_options.IsWindowedMode() && !_TrackOwnWindow()) {
+			return false;
+		}
+		if (!_TrackSource()) {
+			return false;
+		}
 	}
 
 	bool resized = false;
@@ -836,12 +945,24 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 			_stepStatus == StepTimerStatus::ForceNewFrame;
 	}
 
+	// What the pointer did on the surfaces. It is taken in any case, so that
+	// nothing piles up.
+	_pointerEvents.clear();
+	for (const View& view : _views) {
+		std::vector<ScalingSurface::PointerEvent> events = view.surface->TakePointerEvents();
+		_pointerEvents.insert(_pointerEvents.end(), events.begin(), events.end());
+	}
+
 	const Rect destRect = _DestRect();
 	bool overlayNeedsRedraw = false;
 	if (!_UpdateOverlay(destRect, overlayNeedsRedraw)) {
 		return false;
 	}
-	_UpdatePointer(destRect);
+	if (_nested) {
+		_ForwardInput(destRect);
+	} else {
+		_UpdatePointer(destRect);
+	}
 
 	// The cursor to draw: that of the stream, unless it has rested for
 	// longer than the user allows
@@ -870,8 +991,6 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 bool ScalingSession::_UpdateOverlay(const Rect& destRect, bool& needsRedraw) noexcept {
 	needsRedraw = std::exchange(_isOverlayRedrawForced, false);
 
-	// What the pointer did on the surfaces. It is taken in any case, so that
-	// nothing piles up.
 	bool hasInput = false;
 	SmallVector<std::pair<int, bool>, 4> buttonEvents;
 	const auto addButtonEvent = [&](int button, bool isDown) {
@@ -881,20 +1000,18 @@ bool ScalingSession::_UpdateOverlay(const Rect& destRect, bool& needsRedraw) noe
 			hasInput = true;
 		}
 	};
-	for (const View& view : _views) {
-		for (const ScalingSurface::PointerEvent& event : view.surface->TakePointerEvents()) {
-			using Type = ScalingSurface::PointerEvent::Type;
-			if ((event.type == Type::ButtonDown || event.type == Type::ButtonUp) && event.button < 2) {
-				addButtonEvent(event.button, event.type == Type::ButtonDown);
-			} else if (event.type == Type::Scroll) {
-				// The desktop reports 15 units per notch, positive downwards
-				_overlayWheel -= event.value / 15.0f;
-				hasInput = true;
-			} else if (event.type == Type::Leave) {
-				// A button that is held is released for the overlay
-				addButtonEvent(0, false);
-				addButtonEvent(1, false);
-			}
+	for (const ScalingSurface::PointerEvent& event : _pointerEvents) {
+		using Type = ScalingSurface::PointerEvent::Type;
+		if ((event.type == Type::ButtonDown || event.type == Type::ButtonUp) && event.button >= 0 && event.button < 2) {
+			addButtonEvent(event.button, event.type == Type::ButtonDown);
+		} else if (event.type == Type::Scroll && !event.isHorizontal) {
+			// The desktop reports 15 units per notch, positive downwards
+			_overlayWheel -= event.value / 15.0f;
+			hasInput = true;
+		} else if (event.type == Type::Leave) {
+			// A button that is held is released for the overlay
+			addButtonEvent(0, false);
+			addButtonEvent(1, false);
 		}
 	}
 	if (!_overlay) {
@@ -907,7 +1024,9 @@ bool ScalingSession::_UpdateOverlay(const Rect& destRect, bool& needsRedraw) noe
 	std::optional<Point> mousePos;
 	bool canClick = false;
 	const CaptureCursorState cursor = _SourceCursor();
-	if (cursor.isVisible) {
+	// In a nested session the pointer is on the picture's window all the
+	// time, and that is where it clicks
+	if (cursor.isVisible && !_nested) {
 		const Size rendererSize = _RendererSize();
 		const Point onRenderer = ScalingGeometry::SrcToScaling(cursor.pos, _frameSource->SrcRect(), destRect,
 			{ 0, 0, rendererSize.width, rendererSize.height }, false);
@@ -1114,7 +1233,9 @@ bool ScalingSession::_TrackSource() noexcept {
 
 CaptureCursorState ScalingSession::_SourceCursor() const noexcept {
 	CaptureCursorState cursor = _frameSource->CursorState();
-	if (cursor.isVisible) {
+	// Not in a nested session: there the pointer is on the surface while
+	// the cursor of the program is where it points
+	if (cursor.isVisible && !_nested) {
 		for (const View& view : _views) {
 			if (view.surface->IsPointerInside()) {
 				cursor.isVisible = false;
@@ -1371,6 +1492,218 @@ bool ScalingSession::_Render(bool runEffects) noexcept {
 	return true;
 }
 
+bool ScalingSession::_TrackNested() noexcept {
+	const auto now = steady_clock::now();
+	if (!_nested->IsRunning()) {
+		Logger::Get().Info("The compositor of the nested session has ended");
+		_endReason = EndReason::SourceClosed;
+		return false;
+	}
+
+	SwayBridge& bridge = _nested->Bridge();
+	const std::vector<SwayWindow>& windows = bridge.Windows();
+	ScalingSurface& surface = *_views[0].surface;
+	// The program has the keyboard while the picture's window has it
+	_isSourceActive = surface.HasKeyboardFocus();
+
+	if (windows.empty()) {
+		// The program has closed its last window. A launcher that starts
+		// the program proper leaves a gap between two windows, so the end
+		// comes only after a while.
+		if (_hadNestedWindow) {
+			if (!_noWindowSince) {
+				_noWindowSince = now;
+			} else if (now - *_noWindowSince > 3s) {
+				Logger::Get().Info("The program of the nested session has no window any more");
+				_endReason = EndReason::SourceClosed;
+				return false;
+			}
+		}
+		return true;
+	}
+	_hadNestedWindow = true;
+	_noWindowSince.reset();
+
+	// The window that has the keyboard there stands for the program
+	const SwayWindow* main = &windows[0];
+	for (const SwayWindow& window : windows) {
+		if (window.info.isActive) {
+			main = &window;
+		}
+	}
+	_windowId = main->info.id;
+
+	// A single window of a fixed size floats in the middle of the output.
+	// The output takes its size, so that the window is the whole picture; a
+	// window that can be resized fills the output by itself.
+	if (windows.size() == 1 && main->isFloating && !main->info.isFullscreen) {
+		const Rect& frame = main->info.frameRect;
+		const Size size{ frame.Width(), frame.Height() };
+		if (size != _nested->OutputSize()) {
+			if (size != _fitSize) {
+				_fitSize = size;
+				_fitSince = now;
+			} else if (now - _fitSince > 300ms) {
+				_fitSize = {};
+				Logger::Get().Info(fmt::format("The program's window is {}x{}; the nested session takes that size",
+					size.width, size.height));
+				if (_nested->SetOutput(size, _nested->RefreshRate()) && _SetNestedSourceSize(size)) {
+					_isOverlayRedrawForced = true;
+				}
+			}
+		} else if (frame.left != 0 || frame.top != 0) {
+			bridge.Ipc().Command(fmt::format("[con_id={}] move absolute position 0 px 0 px", main->info.id), true);
+		}
+	}
+
+	// The rate of the monitor that shows the picture, so that the program
+	// is not held to a lower one
+	const int32_t monitorRate = surface.OutputRefreshRate();
+	if (monitorRate > _nested->RefreshRate() + 500 && _nested->SetOutput(_nested->OutputSize(), monitorRate)) {
+		_refreshRate = monitorRate;
+	}
+	return true;
+}
+
+void ScalingSession::_ReleaseNestedInput() noexcept {
+	if (!_nested) {
+		return;
+	}
+	WlrInput& input = _nested->Bridge().Input();
+	for (uint32_t key : _pressedKeys) {
+		input.Key(key, false);
+	}
+	for (uint32_t button : _pressedButtons) {
+		input.Button(button, false);
+	}
+	if (!_pressedKeys.empty()) {
+		input.Modifiers(0, 0, 0, 0);
+	}
+	_pressedKeys.clear();
+	_pressedButtons.clear();
+	input.Flush();
+}
+
+// What the window of the picture gets from keyboard and pointer goes to the
+// compositor of the nested session, the pointer at the place of the source
+// that the picture shows under it
+void ScalingSession::_ForwardInput(const Rect& destRect) noexcept {
+	ScalingSurface& surface = *_views[0].surface;
+	WlrInput& input = _nested->Bridge().Input();
+	const auto now = steady_clock::now();
+
+	// The keys refer to the keymap of the desktop
+	int keymapFd;
+	uint32_t keymapSize;
+	if (surface.TakeKeymap(keymapFd, keymapSize)) {
+		input.SetKeymap(keymapFd, keymapSize);
+		close(keymapFd);
+	}
+
+	for (const ScalingSurface::KeyEvent& event : surface.TakeKeyEvents()) {
+		using Type = ScalingSurface::KeyEvent::Type;
+		switch (event.type) {
+		case Type::KeyDown:
+			if (std::ranges::find(_pressedKeys, event.key) == _pressedKeys.end()) {
+				_pressedKeys.push_back(event.key);
+			}
+			input.Key(event.key, true);
+			break;
+		case Type::KeyUp:
+			std::erase(_pressedKeys, event.key);
+			input.Key(event.key, false);
+			break;
+		case Type::Modifiers:
+			input.Modifiers(event.depressed, event.latched, event.locked, event.group);
+			break;
+		case Type::FocusOut:
+			// The releases go to whatever has the keyboard now
+			_ReleaseNestedInput();
+			break;
+		case Type::FocusIn:
+			break;
+		}
+	}
+
+	// While the pointer is over the toolbar or the profiler, it is theirs
+	const bool overlayWantsPointer = _overlay && _overlay->WantsMouse();
+
+	// A program that hides the cursor usually turns something with the
+	// mouse and wants to know how far it moved, not where it is. Then the
+	// pointer of the desktop is held in place and its movement passed on.
+	// The first moments do not count: the capture takes a few frames to
+	// report the cursor.
+	const CaptureCursorState& cursor = _frameSource->CursorState();
+	if (cursor.isVisible || now - _startTime < 500ms) {
+		_cursorHiddenSince.reset();
+	} else if (!_cursorHiddenSince) {
+		_cursorHiddenSince = now;
+	}
+	const bool isHidden = _cursorHiddenSince && now - *_cursorHiddenSince > 150ms;
+	const bool wantsRelative = !overlayWantsPointer &&
+		(_options.Is3DGameMode() || (isHidden && (_isRelativeMode || surface.IsPointerInside())));
+	const Rect& srcRect = _frameSource->SrcRect();
+	if (wantsRelative != _isRelativeMode) {
+		_isRelativeMode = wantsRelative;
+		if (wantsRelative) {
+			surface.SetPointerLocked(true);
+		} else {
+			// The pointer goes on from where the program's cursor is drawn
+			std::optional<Point> hint;
+			if (cursor.isVisible) {
+				const Size rendererSize = _RendererSize();
+				hint = ScalingGeometry::SrcToScaling(cursor.pos, srcRect, destRect,
+					{ 0, 0, rendererSize.width, rendererSize.height }, false);
+			}
+			surface.SetPointerLocked(false, hint);
+		}
+	}
+
+	std::optional<Point> lastPos;
+	for (const ScalingSurface::PointerEvent& event : _pointerEvents) {
+		using Type = ScalingSurface::PointerEvent::Type;
+		switch (event.type) {
+		case Type::Motion:
+			lastPos = event.pos;
+			break;
+		case Type::RelativeMotion:
+			if (_isRelativeMode) {
+				input.MoveRelative(event.dx, event.dy);
+			}
+			break;
+		case Type::ButtonDown:
+			if (!overlayWantsPointer && event.code != 0) {
+				if (std::ranges::find(_pressedButtons, event.code) == _pressedButtons.end()) {
+					_pressedButtons.push_back(event.code);
+				}
+				input.Button(event.code, true);
+			}
+			break;
+		case Type::ButtonUp:
+			// Only what was pressed there is released there
+			if (std::erase(_pressedButtons, event.code) > 0) {
+				input.Button(event.code, false);
+			}
+			break;
+		case Type::Scroll:
+			if (!overlayWantsPointer) {
+				input.Scroll(event.isHorizontal, event.value);
+			}
+			break;
+		case Type::Leave:
+			break;
+		}
+	}
+
+	if (lastPos && !_isRelativeMode && !overlayWantsPointer) {
+		// Beside the picture the pointer stays at the edge of the source
+		const Point onPicture = ClampTo(*lastPos, destRect);
+		const Point onSource = ClampTo(ScalingGeometry::ScalingToSrc(onPicture, srcRect, destRect), srcRect);
+		input.MoveAbsolute(onSource, _nested->OutputSize());
+	}
+	input.Flush();
+}
+
 bool ScalingSession::TakeScreenshot(std::optional<uint32_t> effectIndex) noexcept {
 	if (!_isRunning) {
 		return false;
@@ -1445,8 +1778,16 @@ void ScalingSession::Stop() noexcept {
 
 	// The pointer goes to where the user sees it, as the destructor of
 	// CursorManager does
-	if (_isRunning && _SourceCursor().isVisible) {
+	if (_isRunning && !_nested && _SourceCursor().isVisible) {
 		_ReleasePointerToPicture(_DestRect());
+	}
+	if (_nested) {
+		// The compositor may go on, with another session; nothing stays
+		// pressed in it, and the pointer of the desktop is free again
+		_ReleaseNestedInput();
+		for (const View& view : _views) {
+			view.surface->SetPointerLocked(false);
+		}
 	}
 
 	if (_isPointerSlowed) {
@@ -1514,7 +1855,8 @@ void ScalingSession::Stop() noexcept {
 		_bridge->PlaceWindow(_windowId, *placeAgain);
 	}
 
-	if (!_config.stateFile.empty()) {
+	// A nested session changes nothing on the desktop and has no state file
+	if (!_nested && !_config.stateFile.empty()) {
 		std::error_code ec;
 		std::filesystem::remove(_config.stateFile, ec);
 	}
@@ -1527,6 +1869,7 @@ void ScalingSession::Stop() noexcept {
 	}
 	_isRunning = false;
 	_bridge = nullptr;
+	_nested = nullptr;
 }
 
 Rect ScalingSession::SourceRect() const noexcept {
@@ -1559,6 +1902,8 @@ std::string ScalingSession::Describe() const noexcept {
 	std::string where;
 	if (_options.IsWindowedMode()) {
 		where = fmt::format("in a window of {}x{}", _rendererRect.Width(), _rendererRect.Height());
+	} else if (_nested) {
+		where = "in a fullscreen window";
 	} else {
 		for (const OutputInfo& monitor : _monitors) {
 			where += (where.empty() ? "on " : ", ") + monitor.name;
