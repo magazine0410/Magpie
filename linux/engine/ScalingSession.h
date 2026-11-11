@@ -16,6 +16,7 @@
 // CursorManager in src/Magpie.Core.
 #pragma once
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -347,6 +348,9 @@ private:
 
 	void _WriteStateFile() const noexcept;
 
+	// Writes the answers of the desktop about shown frames to the latency log
+	void _WriteLatencyLog() noexcept;
+
 	// The device is declared first, so that it is destroyed last
 	VulkanDevice _device;
 
@@ -460,6 +464,24 @@ private:
 
 	// Writes the last screenshot to its file
 	std::jthread _screenshotThread;
+
+	// The latency log, for measuring: with the environment variable
+	// MAGPIE_LATENCY_LOG naming a file, every scaled frame gets a line in it
+	// with the times of its way through Magpie, in nanoseconds of the steady
+	// clock, and the colour of the source's pixel at 8,8, by which a test
+	// program numbers its frames (linux/tests/LatencySourceMain.cpp).
+	struct LatencyRecord {
+		uint64_t tag = 0;
+		uint32_t frameId = 0;
+		// The frame arrived from the capture, rendering began, the frame was
+		// handed to the desktop
+		int64_t arrival = 0;
+		int64_t renderStart = 0;
+		int64_t queued = 0;
+	};
+	std::FILE* _latencyLog = nullptr;
+	std::vector<LatencyRecord> _latencyRecords;
+	uint64_t _nextLatencyTag = 1;
 
 	StepTimerStatus _stepStatus = StepTimerStatus::WaitingForNewFrame;
 	bool _hasNewFrame = false;

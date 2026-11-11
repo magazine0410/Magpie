@@ -84,6 +84,23 @@ public:
 		uint32_t group = 0;
 	};
 
+	// When the compositor showed a frame, or that it never did
+	struct PresentationFeedback {
+		// What RequestPresentationFeedback was given for the frame
+		uint64_t tag = 0;
+		// False: another frame replaced this one before it was shown
+		bool isPresented = false;
+		// On the clock of std::chrono::steady_clock, in nanoseconds
+		int64_t time = 0;
+		// The time between two refreshes of the output, in nanoseconds; zero
+		// if the compositor does not know it
+		int64_t refresh = 0;
+		// wp_presentation_feedback.kind: 1 synchronised with the refresh,
+		// 2 time from the hardware, 4 completion reported by the hardware,
+		// 8 shown without a copy (direct scan-out)
+		uint32_t flags = 0;
+	};
+
 	ScalingSurface() noexcept;
 	ScalingSurface(const ScalingSurface&) = delete;
 	ScalingSurface(ScalingSurface&&) = delete;
@@ -201,6 +218,15 @@ public:
 	// The refresh rate of the output the surface is on, in thousandths of a
 	// hertz; zero if that is not known
 	int32_t OutputRefreshRate() const noexcept;
+
+	// Asks the compositor when it shows the next frame that is committed on
+	// the surface (the protocol presentation-time); call it right before the
+	// frame is presented. Returns false if the compositor does not offer
+	// that, or measures with a clock other than the steady one.
+	bool RequestPresentationFeedback(uint64_t tag) noexcept;
+
+	// The answers that have arrived since the last call
+	std::vector<PresentationFeedback> TakePresentationFeedback() noexcept;
 
 private:
 	struct State;

@@ -189,6 +189,18 @@ bool Swapchain::_Create(Size size) noexcept {
 		return false;
 	}
 
+	if (!oldSwapchain) {
+		// What decides whether the desktop can show the images without
+		// composing them itself
+		std::string offered;
+		for (VkPresentModeKHR mode : _availablePresentModes) {
+			offered += fmt::format("{}{}", offered.empty() ? "" : ", ", (int)mode);
+		}
+		Logger::Get().Info(fmt::format("Swap chain: format {}, {}, present mode {} of {}",
+			(int)_format, swapchainInfo.compositeAlpha == VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR ? "opaque" : "alpha from the surface",
+			(int)_presentMode, offered));
+	}
+
 	uint32_t count = 0;
 	vkGetSwapchainImagesKHR(device, _swapchain, &count, nullptr);
 	_images.resize(count);

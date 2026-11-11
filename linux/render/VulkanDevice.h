@@ -11,6 +11,7 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 #include "EffectDesc.h"
+#include "Geometry.h"
 #include "ScalingOptions.h"
 
 namespace Magpie {
@@ -180,8 +181,9 @@ public:
 	// Fills a new texture. `pixels` is tightly packed in the texture's format.
 	bool UploadTexture(Texture& texture, std::span<const uint8_t> pixels, VkImageLayout layout) noexcept;
 
-	// Copies the content of a texture, tightly packed in its format
-	bool ReadTexture(const Texture& texture, std::vector<uint8_t>& pixels) noexcept;
+	// Copies the content of a texture, tightly packed in its format; with
+	// `region` only that part of it, which has to lie inside the texture
+	bool ReadTexture(const Texture& texture, std::vector<uint8_t>& pixels, const Rect* region = nullptr) noexcept;
 
 private:
 	bool _CreateInstance(const Options& options) noexcept;

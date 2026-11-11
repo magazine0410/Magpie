@@ -939,8 +939,9 @@ bool VulkanDevice::UploadTexture(Texture& texture, std::span<const uint8_t> pixe
 	return true;
 }
 
-bool VulkanDevice::ReadTexture(const Texture& texture, std::vector<uint8_t>& pixels) noexcept {
-	const size_t size = (size_t)texture.width * texture.height * BytesPerPixel(texture.format);
+bool VulkanDevice::ReadTexture(const Texture& texture, std::vector<uint8_t>& pixels, const Rect* region) noexcept {
+	const Rect rect = region ? *region : Rect{ 0, 0, (int32_t)texture.width, (int32_t)texture.height };
+	const size_t size = (size_t)rect.Width() * rect.Height() * BytesPerPixel(texture.format);
 	if (size == 0) {
 		Logger::Get().Error("Textures of this format cannot be read");
 		return false;
@@ -961,11 +962,12 @@ bool VulkanDevice::ReadTexture(const Texture& texture, std::vector<uint8_t>& pix
 			TransitionImage(cmd, texture.image, texture.layout, copyLayout);
 		}
 
-		const VkBufferImageCopy region{
+		const VkBufferImageCopy copy{
 			.imageSubresource = COLOR_LAYER,
-			.imageExtent = { texture.width, texture.height, 1 }
+			.imageOffset = { rect.left, rect.top, 0 },
+			.imageExtent = { (uint32_t)rect.Width(), (uint32_t)rect.Height(), 1 }
 		};
-		vkCmdCopyImageToBuffer(cmd, texture.image, copyLayout, staging->buffer, 1, &region);
+		vkCmdCopyImageToBuffer(cmd, texture.image, copyLayout, staging->buffer, 1, &copy);
 
 		if (needsTransition) {
 			TransitionImage(cmd, texture.image, copyLayout, texture.layout);

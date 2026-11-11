@@ -1,5 +1,6 @@
 #include "ScalingSession.h"
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -249,6 +250,19 @@ ScalingError ScalingSession::_StartScaling() noexcept {
 		return result;
 	};
 
+	// For measuring: another way of presenting than the caller chose, with
+	// every program that scales
+	if (const char* mode = std::getenv("MAGPIE_PRESENT_MODE")) {
+		const std::string_view name = mode;
+		if (name == "fifo") {
+			_config.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+		} else if (name == "mailbox") {
+			_config.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+		} else if (name == "immediate") {
+			_config.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+		}
+	}
+
 	if (!_device.Initialize({ _options.graphicsCardId, _config.validation, true })) {
 		return fail(ScalingError::ScalingFailedGeneral);
 	}
@@ -338,6 +352,16 @@ ScalingError ScalingSession::_StartScaling() noexcept {
 	_isRunning = true;
 	_isSourceActive = true;
 	_startTime = steady_clock::now();
+	if (const char* path = std::getenv("MAGPIE_LATENCY_LOG"); path && *path) {
+		_latencyLog = std::fopen(path, "a");
+		if (_latencyLog) {
+			// A line at a time, so that nothing is lost when the program is ended
+			std::setvbuf(_latencyLog, nullptr, _IOLBF, 0);
+			std::fprintf(_latencyLog, "# %s, present mode %d\n", Describe().c_str(), (int)_views[0].swapchain->PresentMode());
+		} else {
+			Logger::Get().Warn(std::string("The latency log cannot be written: ") + path);
+		}
+	}
 	// A window that changes its size is to be noticed on every desktop
 	_bridge->SetWatching(true);
 
@@ -908,6 +932,9 @@ bool ScalingSession::Step(std::span<const int> wakeFds) noexcept {
 			return false;
 		}
 	}
+	if (_latencyLog) {
+		_WriteLatencyLog();
+	}
 	if (!_bridge->Dispatch()) {
 		_endReason = EndReason::Failed;
 		return false;
@@ -1418,7 +1445,41 @@ void ScalingSession::_SetPointerSlowed(bool slowed, const Rect& destRect) noexce
 	_bridge->ApplyPointerSpeed(devices);
 }
 
+static int64_t Nanoseconds(steady_clock::time_point time) noexcept {
+	return duration_cast<nanoseconds>(time.time_since_epoch()).count();
+}
+
+void ScalingSession::_WriteLatencyLog() noexcept {
+	for (const ScalingSurface::PresentationFeedback& feedback : _views[0].surface->TakePresentationFeedback()) {
+		const auto it = std::find_if(_latencyRecords.begin(), _latencyRecords.end(),
+			[&](const LatencyRecord& record) { return record.tag == feedback.tag; });
+		if (it == _latencyRecords.end()) {
+			continue;
+		}
+		std::fprintf(_latencyLog, "frame=%06x arrival=%lld render=%lld queued=%lld ",
+			it->frameId, (long long)it->arrival, (long long)it->renderStart, (long long)it->queued);
+		if (feedback.isPresented) {
+			std::fprintf(_latencyLog, "presented=%lld refresh=%lld flags=%u\n",
+				(long long)feedback.time, (long long)feedback.refresh, feedback.flags);
+		} else {
+			std::fprintf(_latencyLog, "presented=discarded\n");
+		}
+		_latencyRecords.erase(it);
+	}
+	// The desktop owes no answer for a surface it does not show
+	if (_latencyRecords.size() > 1000) {
+		_latencyRecords.erase(_latencyRecords.begin(), _latencyRecords.begin() + 500);
+	}
+}
+
 bool ScalingSession::_Render(bool runEffects) noexcept {
+	const int64_t renderStart = Nanoseconds(steady_clock::now());
+	// The desktop is asked when it shows this frame, on the first surface
+	uint64_t latencyTag = 0;
+	if (runEffects && _latencyLog && _views[0].surface->RequestPresentationFeedback(_nextLatencyTag)) {
+		latencyTag = _nextLatencyTag++;
+	}
+
 	if (runEffects) {
 		if (_frameSource->Output() != _chainInput) {
 			if (!_chain->Resize(_RendererSize(), _frameSource->Output())) {
@@ -1487,6 +1548,24 @@ bool ScalingSession::_Render(bool runEffects) noexcept {
 			return false;
 		}
 		drawEffects = false;
+	}
+
+	if (latencyTag != 0) {
+		LatencyRecord record{
+			.tag = latencyTag,
+			.arrival = Nanoseconds(_frameSource->LastFrameArrivalTime()),
+			.renderStart = renderStart,
+			.queued = Nanoseconds(steady_clock::now())
+		};
+		// After the frame is on its way, so that reading does not hold it up
+		const Texture& source = *_frameSource->Output();
+		const Rect pixel{ 8, 8, 9, 9 };
+		std::vector<uint8_t> bytes;
+		if (source.width > 8 && source.height > 8 && _device.ReadTexture(source, bytes, &pixel) && bytes.size() >= 3) {
+			const bool isBlueFirst = source.format == VK_FORMAT_B8G8R8A8_UNORM;
+			record.frameId = ((uint32_t)bytes[isBlueFirst ? 2 : 0] << 16) | ((uint32_t)bytes[1] << 8) | bytes[isBlueFirst ? 0 : 2];
+		}
+		_latencyRecords.push_back(record);
 	}
 
 	_drawnCursor = cursor;
@@ -1846,6 +1925,12 @@ void ScalingSession::Stop() noexcept {
 		}
 		_isWindowMoved = false;
 	}
+
+	if (_latencyLog) {
+		std::fclose(_latencyLog);
+		_latencyLog = nullptr;
+	}
+	_latencyRecords.clear();
 
 	// In this order: everything that draws, the surfaces, the capture
 	_overlay.reset();

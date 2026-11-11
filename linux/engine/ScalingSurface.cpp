@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <linux/input-event-codes.h>
 #include <poll.h>
 #include <unistd.h>
@@ -12,6 +13,7 @@
 #include "Logger.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
+#include "presentation-time-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
@@ -103,6 +105,23 @@ struct ScalingSurface::State {
 	uint32_t keymapSize = 0;
 	// The output the surface was last told it is on
 	wl_output* currentOutput = nullptr;
+	wp_presentation* presentation = nullptr;
+	// The clock the compositor reports presentation times with
+	uint32_t presentationClock = UINT32_MAX;
+	std::vector<PresentationFeedback> presentationFeedback;
+	// One frame the compositor was asked about and has not answered for
+	struct FeedbackRequest {
+		State* state = nullptr;
+		uint64_t tag = 0;
+	};
+	std::vector<std::unique_ptr<FeedbackRequest>> feedbackRequests;
+
+	void FinishFeedback(FeedbackRequest* request, const PresentationFeedback& feedback) noexcept {
+		presentationFeedback.push_back(feedback);
+		std::erase_if(feedbackRequests, [&](const std::unique_ptr<FeedbackRequest>& candidate) {
+			return candidate.get() == request;
+		});
+	}
 
 	// Asks for the lock or gives it back, as far as that is possible now
 	void ApplyLock(std::optional<Point> hint) noexcept {
@@ -421,6 +440,27 @@ struct ScalingSurface::State {
 		}
 	};
 
+	static constexpr wp_presentation_listener PRESENTATION_LISTENER{
+		.clock_id = [](void* data, wp_presentation*, uint32_t clock) { ((State*)data)->presentationClock = clock; }
+	};
+
+	static constexpr wp_presentation_feedback_listener FEEDBACK_LISTENER{
+		.sync_output = [](void*, struct wp_presentation_feedback*, wl_output*) {},
+		.presented = [](void* data, struct wp_presentation_feedback* feedback, uint32_t secondsHigh, uint32_t secondsLow,
+			uint32_t nanoseconds, uint32_t refresh, uint32_t, uint32_t, uint32_t flags) {
+			FeedbackRequest* request = (FeedbackRequest*)data;
+			const int64_t seconds = (int64_t)(((uint64_t)secondsHigh << 32) | secondsLow);
+			wp_presentation_feedback_destroy(feedback);
+			request->state->FinishFeedback(request,
+				{ request->tag, true, seconds * 1'000'000'000 + nanoseconds, refresh, flags });
+		},
+		.discarded = [](void* data, struct wp_presentation_feedback* feedback) {
+			FeedbackRequest* request = (FeedbackRequest*)data;
+			wp_presentation_feedback_destroy(feedback);
+			request->state->FinishFeedback(request, { request->tag });
+		}
+	};
+
 	static constexpr wl_seat_listener SEAT_LISTENER{
 		.capabilities = [](void* data, wl_seat* seat, uint32_t capabilities) {
 			State& state = *(State*)data;
@@ -467,6 +507,9 @@ struct ScalingSurface::State {
 			} else if (std::strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0) {
 				state.relativePointerManager = (zwp_relative_pointer_manager_v1*)wl_registry_bind(
 					registry, name, &zwp_relative_pointer_manager_v1_interface, 1);
+			} else if (std::strcmp(interface, wp_presentation_interface.name) == 0) {
+				state.presentation = (wp_presentation*)wl_registry_bind(registry, name, &wp_presentation_interface, 1);
+				wp_presentation_add_listener(state.presentation, &PRESENTATION_LISTENER, &state);
 			} else if (std::strcmp(interface, wl_output_interface.name) == 0 && version >= 4) {
 				auto output = std::make_unique<Output>();
 				output->proxy = (wl_output*)wl_registry_bind(registry, name, &wl_output_interface, 4);
@@ -640,6 +683,22 @@ bool ScalingSurface::InhibitIdle() noexcept {
 	state.idleInhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(state.idleInhibitManager, state.surface);
 	wl_display_flush(state.display);
 	return state.idleInhibitor != nullptr;
+}
+
+bool ScalingSurface::RequestPresentationFeedback(uint64_t tag) noexcept {
+	State& state = *_state;
+	if (!state.presentation || !state.surface || state.presentationClock != (uint32_t)CLOCK_MONOTONIC) {
+		return false;
+	}
+	// Belongs to the next commit of the surface, which the swap chain makes
+	state.feedbackRequests.push_back(std::make_unique<State::FeedbackRequest>(&state, tag));
+	struct wp_presentation_feedback* feedback = wp_presentation_feedback(state.presentation, state.surface);
+	wp_presentation_feedback_add_listener(feedback, &State::FEEDBACK_LISTENER, state.feedbackRequests.back().get());
+	return true;
+}
+
+std::vector<ScalingSurface::PresentationFeedback> ScalingSurface::TakePresentationFeedback() noexcept {
+	return std::exchange(_state->presentationFeedback, {});
 }
 
 bool ScalingSurface::PumpEvents() noexcept {

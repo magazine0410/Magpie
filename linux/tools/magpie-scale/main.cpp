@@ -79,6 +79,7 @@ static void PrintUsage() {
 		"  --max-fps N        frame rate limit\n"
 		"  --min-fps N        frames are repeated to keep this rate\n"
 		"  --benchmark        render without waiting for new frames of the source\n"
+		"  --gpu N            use graphics card N of magpie-scale-image --list-gpus\n"
 		"  --validate         use the Vulkan validation layers\n"
 		"\n"
 		"Desktop:\n"
@@ -146,6 +147,7 @@ int main(int argc, char* argv[]) {
 	float seconds = 0.0f;
 	float screenshotAt = 0.0f;
 	bool verbose = false;
+	int gpu = -1;
 	options.screenshotsDir = Paths::ScreenshotsDir({});
 
 	for (int i = 1; i < argc; ++i) {
@@ -268,6 +270,11 @@ int main(int argc, char* argv[]) {
 			options.maxFrameRate = number(1.0f);
 		} else if (arg == "--min-fps") {
 			options.minFrameRate = number(0.0f);
+		} else if (arg == "--gpu") {
+			const char* text = value();
+			if (!ParseInt(text, gpu) || gpu < 0) {
+				invalid(text);
+			}
 		} else if (arg == "--validate") {
 			config.validation = true;
 		} else if (arg == "--keep-screen-on") {
@@ -309,6 +316,21 @@ int main(int argc, char* argv[]) {
 	}
 	if (options.effects.empty()) {
 		options.effects.push_back({ .name = "Bilinear", .scalingType = ScalingType::Fit });
+	}
+
+	// The graphics card with number N. GraphicsCardId needs its IDs as well,
+	// which only a device has.
+	if (gpu >= 0) {
+		VulkanDevice probe;
+		if (!probe.Initialize({})) {
+			return 1;
+		}
+		const auto& cards = probe.GraphicsCards();
+		if ((size_t)gpu >= cards.size() || !cards[gpu].isUsable) {
+			std::fprintf(stderr, "Graphics card %d does not exist or is not usable.\n", gpu);
+			return 1;
+		}
+		options.graphicsCardId = { gpu, cards[gpu].vendorId, cards[gpu].deviceId };
 	}
 
 	std::string bridgeError;

@@ -29,6 +29,8 @@ foreach(xml IN ITEMS
 	${WAYLAND_PROTOCOLS_DIR}/unstable/relative-pointer/relative-pointer-unstable-v1.xml
 	# Keeping the screen on where the session bus has no service for it
 	${WAYLAND_PROTOCOLS_DIR}/unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
+	# When a frame was shown, for the latency log
+	${WAYLAND_PROTOCOLS_DIR}/stable/presentation-time/presentation-time.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)

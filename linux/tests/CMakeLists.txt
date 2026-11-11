@@ -80,6 +80,13 @@ target_link_libraries(magpie_test_window PRIVATE magpie_engine magpie_bridge Pkg
 target_include_directories(magpie_test_window PRIVATE $<TARGET_PROPERTY:magpie_engine,BINARY_DIR>)
 target_compile_options(magpie_test_window PRIVATE -Wno-missing-field-initializers)
 add_dependencies(magpie_engine_tests magpie_test_window)
+
+# A window that numbers its frames, for measuring latency (see
+# tools/latency_report.py)
+add_executable(magpie_latency_source LatencySourceMain.cpp)
+target_link_libraries(magpie_latency_source PRIVATE magpie_engine PkgConfig::WAYLAND_CLIENT magpie_warnings)
+target_include_directories(magpie_latency_source PRIVATE $<TARGET_PROPERTY:magpie_engine,BINARY_DIR>)
+target_compile_options(magpie_latency_source PRIVATE -Wno-missing-field-initializers)
 target_compile_definitions(magpie_engine_tests PRIVATE
 	MAGPIE_TEST_WINDOW_PROGRAM="$<TARGET_FILE:magpie_test_window>")
 target_compile_definitions(magpie_engine_tests PRIVATE
