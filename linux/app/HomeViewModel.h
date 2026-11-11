@@ -21,6 +21,7 @@ class HomeViewModel : public QObject {
 	Q_PROPERTY(QString toolbarShortcut READ ToolbarShortcut NOTIFY Changed)
 	Q_PROPERTY(QString screenshotShortcut READ ScreenshotShortcut NOTIFY Changed)
 	Q_PROPERTY(bool hasShortcuts READ HasShortcuts NOTIFY Changed)
+	Q_PROPERTY(bool canConfigureShortcuts READ CanConfigureShortcuts NOTIFY Changed)
 
 	Q_PROPERTY(QString timerDescription READ TimerDescription NOTIFY Changed)
 	Q_PROPERTY(bool isTimerOn READ IsTimerOn NOTIFY Changed)
@@ -63,6 +64,7 @@ public:
 	QString ToolbarShortcut() const;
 	QString ScreenshotShortcut() const;
 	bool HasShortcuts() const;
+	bool CanConfigureShortcuts() const;
 	Q_INVOKABLE void configureShortcuts();
 
 	QString TimerDescription() const;

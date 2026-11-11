@@ -70,6 +70,12 @@ public:
 		return !_shortcuts.empty();
 	}
 
+	// The desktop has a dialog for the keys. Where it has none, the keys
+	// are those of config.json.
+	bool CanConfigureShortcuts() const noexcept {
+		return _service.CanConfigureShortcuts();
+	}
+
 	// Opens the desktop's dialog for the keys
 	void ConfigureShortcuts();
 

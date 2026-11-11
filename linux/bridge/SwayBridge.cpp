@@ -201,6 +201,7 @@ DesktopBridge::Traits SwayBridge::GetTraits() const noexcept {
 		// another output that is made the active one
 		.activationMovesPointer = true,
 		.opensWindowsOnActiveOutput = true,
+		.tilesNewWindows = true,
 		.canMinimize = false,
 		.captureMethod = "Virtual output (image copy)"
 	};

@@ -216,7 +216,20 @@ bool ScalingService::Initialize(Config config, std::string& error) noexcept {
 				trigger(ShortcutAction::TakeScreenshot)
 			}
 		};
-		if (!_shortcuts.Initialize(_bus, _config.appId, wanted)) {
+		if (_bridge->HasOwnShortcuts()) {
+			// The keys of the settings, bound while the service runs
+			std::vector<ShortcutRequest> requests;
+			for (const PortalShortcuts::Shortcut& shortcut : wanted) {
+				requests.push_back({ shortcut.id, shortcut.preferredTrigger });
+			}
+			_bridgeShortcuts = _bridge->BindShortcuts(requests);
+			_hasBridgeShortcuts = true;
+			if (_bridgeShortcuts.empty()) {
+				Logger::Get().Warn("No global shortcut is registered");
+			}
+		} else if (_shortcuts.Initialize(_bus, _config.appId, wanted)) {
+			_canConfigureShortcuts = true;
+		} else {
 			Logger::Get().Warn("No global shortcut is registered");
 		}
 	}
@@ -229,7 +242,8 @@ void ScalingService::_UpdateShortcuts() noexcept {
 	_scaleShortcut.clear();
 	_windowedScaleShortcut.clear();
 	_screenshotShortcut.clear();
-	for (const auto& [id, trigger] : _shortcuts.Bound()) {
+	const BoundShortcuts& bound = _hasBridgeShortcuts ? _bridgeShortcuts : _shortcuts.Bound();
+	for (const auto& [id, trigger] : bound) {
 		if (id == SHORTCUT_SCALE) {
 			_scaleShortcut = trigger;
 		} else if (id == SHORTCUT_SCALE_WINDOWED) {
@@ -240,7 +254,7 @@ void ScalingService::_UpdateShortcuts() noexcept {
 	}
 
 	if (_config.shortcutsChanged) {
-		_config.shortcutsChanged(_shortcuts.Bound());
+		_config.shortcutsChanged(bound);
 	}
 }
 
@@ -296,7 +310,11 @@ void ScalingService::CheckForeground() noexcept {
 }
 
 void ScalingService::ConfigureShortcuts() noexcept {
-	_Post([this] { _shortcuts.Configure(); });
+	_Post([this] {
+		if (_canConfigureShortcuts) {
+			_shortcuts.Configure();
+		}
+	});
 }
 
 void ScalingService::ListWindows(std::function<void(std::vector<Window> windows)> reply) noexcept {
@@ -579,6 +597,22 @@ void ScalingService::_CheckForeground() noexcept {
 	_checkedWindow = active;
 }
 
+void ScalingService::_OnShortcut(const std::string& id) noexcept {
+	if (id == SHORTCUT_SCALE) {
+		_Toggle(false);
+	} else if (id == SHORTCUT_SCALE_WINDOWED) {
+		_Toggle(true);
+	} else if (id == SHORTCUT_SCREENSHOT) {
+		if (!_session || !_session->TakeScreenshot()) {
+			Logger::Get().Warn("No screenshot: no window is scaled");
+		}
+	} else if (id == SHORTCUT_TOOLBAR) {
+		if (_session) {
+			_session->SwitchToolbarState();
+		}
+	}
+}
+
 void ScalingService::Run() noexcept {
 	const int busFd = sd_bus_get_fd(_bus);
 
@@ -613,19 +647,10 @@ void ScalingService::Run() noexcept {
 		}
 
 		for (const std::string& id : _shortcuts.TakeActivated()) {
-			if (id == SHORTCUT_SCALE) {
-				_Toggle(false);
-			} else if (id == SHORTCUT_SCALE_WINDOWED) {
-				_Toggle(true);
-			} else if (id == SHORTCUT_SCREENSHOT) {
-				if (!_session || !_session->TakeScreenshot()) {
-					Logger::Get().Warn("No screenshot: no window is scaled");
-				}
-			} else if (id == SHORTCUT_TOOLBAR) {
-				if (_session) {
-					_session->SwitchToolbarState();
-				}
-			}
+			_OnShortcut(id);
+		}
+		for (const std::string& id : _bridge->TakeActivatedShortcuts()) {
+			_OnShortcut(id);
 		}
 		if (_shortcuts.TakeChanged()) {
 			_UpdateShortcuts();

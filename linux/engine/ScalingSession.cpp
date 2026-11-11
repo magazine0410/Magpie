@@ -232,7 +232,8 @@ ScalingError ScalingSession::Start(
 			.isWindowedMode = _options.IsWindowedMode(),
 			.isDeveloperMode = _options.IsDeveloperMode(),
 			.showDynamicDetectionStatistics = _options.IsStatisticsForDynamicDetectionEnabled() &&
-				_options.duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Dynamic
+				_options.duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Dynamic,
+			.canMinimizeSource = _traits.canMinimize
 		}, _options.overlayOptions, _chain->ActiveEffectDescs())) {
 			_overlay->SetToolbarState(_options.IsWindowedMode() ?
 				_options.windowedInitialToolbarState : _options.fullscreenInitialToolbarState);
@@ -587,7 +588,7 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 		_minWindowedSize, [this](Size proposed, bool isWidthChanged, bool isHeightChanged) {
 			return ScalingGeometry::CalcResizedWindowedRendererSize(
 				proposed, isWidthChanged, isHeightChanged, _srcSize, _minWindowedSize, _maxWindowedSize);
-		})) {
+		}, _traits.tilesNewWindows)) {
 		return false;
 	}
 
@@ -640,11 +641,18 @@ bool ScalingSession::_PlaceOwnWindow() noexcept {
 		content.top - (own.clientRect.top - own.frameRect.top),
 		0, 0
 	};
+	// The size of the content that was chosen, with the decoration the
+	// desktop has put around the window. A desktop that tiles new windows
+	// has given the window another size for the time being.
+	const Size frameSize{
+		content.Width() + own.frameRect.Width() - own.clientRect.Width(),
+		content.Height() + own.frameRect.Height() - own.clientRect.Height()
+	};
 	const Rect& monitor = _monitors[0].rect;
-	frame.left = std::max(std::min(frame.left, monitor.right - own.frameRect.Width()), monitor.left);
-	frame.top = std::max(std::min(frame.top, monitor.bottom - own.frameRect.Height()), monitor.top);
-	frame.right = frame.left + own.frameRect.Width();
-	frame.bottom = frame.top + own.frameRect.Height();
+	frame.left = std::max(std::min(frame.left, monitor.right - frameSize.width), monitor.left);
+	frame.top = std::max(std::min(frame.top, monitor.bottom - frameSize.height), monitor.top);
+	frame.right = frame.left + frameSize.width;
+	frame.bottom = frame.top + frameSize.height;
 
 	if (!_bridge->PlaceWindow(_ownWindowId, { .frameRect = frame, .noBorder = own.hasNoBorder })) {
 		Logger::Get().Warn("The window with the scaled picture could not be put where the source was");
@@ -658,6 +666,8 @@ bool ScalingSession::_PlaceOwnWindow() noexcept {
 	_isOwnWindowKeptAbove = !_options.IsTopmostDisabled();
 	// A new window may have taken the focus; it belongs to the source
 	_bridge->PlaceWindow(_windowId, { .noBorder = _sourceNoBorder, .activate = true, .setGeometry = false });
+	// It is where it belongs; from now on the user may resize it
+	_views[0].surface->ReleaseFixedSize();
 
 	return _TrackOwnWindow();
 }
@@ -675,8 +685,10 @@ bool ScalingSession::_TrackOwnWindow() noexcept {
 		_endReason = EndReason::SourceMinimized;
 		return false;
 	}
-	if (own.isActive) {
+	if (own.isActive && !_traits.activationMovesPointer) {
 		// The user clicked the title bar. The keyboard belongs to the source.
+		// Where that would take the pointer off the title bar, the source
+		// becomes active when the pointer next goes to it.
 		_bridge->PlaceWindow(_windowId, { .noBorder = _sourceNoBorder, .activate = true, .setGeometry = false });
 	}
 
@@ -1246,6 +1258,10 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 		_SetPointerSlowed(true, destRect);
 		_bridge->MovePointer({ origin.x + onSource.x, origin.y + onSource.y });
 		++_statistics.pointerCaptures;
+		if (_traits.activationMovesPointer && !_isSourceActive) {
+			// See _TrackOwnWindow: now the pointer is on the source anyway
+			_bridge->PlaceWindow(_windowId, { .noBorder = _sourceNoBorder, .activate = true, .setGeometry = false });
+		}
 		return;
 	}
 }

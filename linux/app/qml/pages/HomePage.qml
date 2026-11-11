@@ -28,6 +28,7 @@ PageFrame {
             ShortcutView {
                 key: page.vm.scaleShortcut
                 available: page.vm.hasShortcuts
+                canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
             }
         }
@@ -38,6 +39,7 @@ PageFrame {
             ShortcutView {
                 key: page.vm.windowedScaleShortcut
                 available: page.vm.hasShortcuts
+                canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
             }
         }
@@ -119,6 +121,7 @@ PageFrame {
             ShortcutView {
                 key: page.vm.toolbarShortcut
                 available: page.vm.hasShortcuts
+                canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
             }
         }
@@ -129,6 +132,7 @@ PageFrame {
             ShortcutView {
                 key: page.vm.screenshotShortcut
                 available: page.vm.hasShortcuts
+                canChange: page.vm.canConfigureShortcuts
                 onChangeRequested: page.vm.configureShortcuts()
             }
         }

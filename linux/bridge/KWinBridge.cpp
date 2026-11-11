@@ -406,6 +406,7 @@ DesktopBridge::Traits KWinBridge::GetTraits() const noexcept {
 		.customModeWidthStep = 8,
 		.activationMovesPointer = false,
 		.opensWindowsOnActiveOutput = false,
+		.tilesNewWindows = false,
 		.canMinimize = true,
 		.captureMethod = "Virtual output (PipeWire)"
 	};

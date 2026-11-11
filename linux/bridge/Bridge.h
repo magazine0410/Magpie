@@ -211,6 +211,10 @@ public:
 		// the virtual output, whatever program it belongs to. The session
 		// sends it to the monitor unless it is of the source's program.
 		bool opensWindowsOnActiveOutput = false;
+		// The desktop lays new windows out side by side unless they say
+		// that they cannot be resized. The window of windowed scaling then
+		// starts as one of a fixed size, so that it gets the size it asks for.
+		bool tilesNewWindows = false;
 		// The desktop can minimize a window and tells when one is minimized
 		bool canMinimize = true;
 		// What the toolbar and the log call the way of capturing

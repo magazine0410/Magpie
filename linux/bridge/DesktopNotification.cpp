@@ -34,10 +34,14 @@ void DesktopNotification::Show(
 		result = sd_bus_message_append(call, "i", 3000);
 	}
 	if (result >= 0) {
-		result = sd_bus_call(bus, call, 0, nullptr, nullptr);
+		// Sent without waiting for the answer. A desktop whose notification
+		// service does not come up would otherwise hold the caller, which
+		// is the thread that scales, for 25 seconds.
+		sd_bus_message_set_expect_reply(call, 0);
+		result = sd_bus_send(bus, call, nullptr);
 	}
 	if (result < 0) {
-		Logger::Get().Info("The desktop showed no notification");
+		Logger::Get().Info("The notification could not be sent");
 	}
 
 	sd_bus_message_unref(call);

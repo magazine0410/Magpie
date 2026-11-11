@@ -127,6 +127,12 @@ public:
 	// Opens the desktop's dialog for the keys of the shortcuts
 	void ConfigureShortcuts() noexcept;
 
+	// Whether the desktop has such a dialog. Where it has none, the keys
+	// are those of the settings. Valid after Initialize.
+	bool CanConfigureShortcuts() const noexcept {
+		return _canConfigureShortcuts;
+	}
+
 	// The windows that can be scaled, without the program's own. `reply` is
 	// called on the service's thread.
 	void ListWindows(std::function<void(std::vector<Window> windows)> reply) noexcept;
@@ -140,6 +146,7 @@ private:
 	void _SetState(State state) noexcept;
 	void _AnnounceChanges() noexcept;
 	void _UpdateShortcuts() noexcept;
+	void _OnShortcut(const std::string& id) noexcept;
 
 	Window _Identify(const WindowInfo& info) const noexcept;
 	bool _IsOwnOrForbidden(const WindowInfo& info) const noexcept;
@@ -156,7 +163,12 @@ private:
 	Config _config;
 	std::unique_ptr<DesktopBridge> _bridge;
 	sd_bus* _bus = nullptr;
+	// The shortcuts come from the portal, or from the back end of a desktop
+	// whose portal has none; then _bridgeShortcuts has what was bound
 	PortalShortcuts _shortcuts;
+	BoundShortcuts _bridgeShortcuts;
+	bool _hasBridgeShortcuts = false;
+	std::atomic<bool> _canConfigureShortcuts = false;
 	std::unique_ptr<ScalingSession> _session;
 	State _state = State::Idle;
 

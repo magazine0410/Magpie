@@ -675,6 +675,27 @@ TEST_CASE("An output of Sway is captured with its cursor", "[sway][desktop]") {
 		CHECK(PixelAt(device, output, 310, 220) == TestWindow::ColorAt(size, 320, 240));
 	}
 
+	SECTION("an output whose width is no multiple of four") {
+		// Rows of three bytes per pixel then end between two multiples of four
+		REQUIRE(bridge.ConfigureOutput(name, { 642, 482 }, origin, 120'000));
+		REQUIRE(bridge.PlaceWindow(source.info.id, {
+			.frameRect = { origin.x + 1, origin.y + 1, origin.x + 641, origin.y + 481 },
+			.noBorder = true
+		}));
+		const std::unique_ptr<FrameSource> frames = FrameSource::Create(device, *capture, {
+			.cropping = { 1, 1, 1, 1 }
+		});
+		REQUIRE(frames);
+		REQUIRE(PumpUntil(*frames, [](FrameSourceState state) { return state == FrameSourceState::NewFrame; }));
+		CHECK(frames->SrcRect() == Rect{ 1, 1, 641, 481 });
+		const Texture& output = *frames->Output();
+		CHECK(output.width == 640);
+		for (const Point pt : { Point{ 5, 5 }, Point{ 639, 0 }, Point{ 0, 479 }, Point{ 639, 479 }, Point{ 320, 240 } }) {
+			INFO("at " << pt.x << "," << pt.y);
+			CHECK(PixelAt(device, output, pt.x, pt.y) == TestWindow::ColorAt(size, pt.x, pt.y));
+		}
+	}
+
 	SECTION("the capture ends with the output") {
 		const std::unique_ptr<FrameSource> frames = FrameSource::Create(device, *capture, {});
 		REQUIRE(frames);
@@ -1017,6 +1038,197 @@ TEST_CASE("A window is scaled to fullscreen on Sway", "[sway][desktop][session]"
 			CHECK(after.info.frameRect == before.info.frameRect);
 		}
 	}
+}
+
+TEST_CASE("A window is scaled into a window on Sway", "[sway][desktop][session]") {
+	SessionFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& bridge = fixture.bridge;
+	ScalingSession& session = fixture.session;
+	REQUIRE_FALSE(RenderTest::TestDevices().empty());
+	VulkanDevice& device = *RenderTest::TestDevices()[0].device;
+
+	const Size size{ 640, 480 };
+	const auto window = fixture.OpenWindow({ .title = "source" });
+	const SwayWindow before = fixture.Find("source");
+
+	fixture.options.flags |= ScalingFlags::WindowedMode;
+	fixture.options.initialWindowedScaleFactor = 1.5f;
+	REQUIRE(session.Start(bridge, before.info.id, fixture.options, fixture.config) == ScalingError::NoError);
+	REQUIRE(session.IsWindowedMode());
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// The source is on its output, with a strip around it on every side
+	bridge.ListWindows();
+	const SwayWindow* scaledNow = nullptr;
+	for (const SwayWindow& candidate : bridge.Windows()) {
+		if (candidate.info.id == before.info.id) {
+			scaledNow = &candidate;
+		}
+	}
+	REQUIRE(scaledNow);
+	const SwayWindow scaled = *scaledNow;
+	CHECK(scaled.output == "HEADLESS-2");
+	CHECK(session.SourceRect() == scaled.info.frameRect);
+	for (const OutputInfo& output : bridge.ListOutputs()) {
+		if (output.isVirtual) {
+			CHECK(output.rect.Width() == 642);
+			CHECK(output.rect.Height() == 482);
+		}
+	}
+
+	// The picture is in a window of Magpie's own on the monitor, one and a
+	// half times as large as the source
+	// It has the title of the source
+	const auto findPicture = [&]() -> std::optional<SwayWindow> {
+		bridge.ListWindows();
+		for (const SwayWindow& candidate : bridge.Windows()) {
+			if (candidate.info.title == "source" && candidate.info.id != before.info.id) {
+				return candidate;
+			}
+		}
+		return std::nullopt;
+	};
+	const bool isPictureReady = fixture.StepUntil([&] {
+		const std::optional<SwayWindow> found = findPicture();
+		// With its title bar, which Sway gives a window a moment after its place
+		return found && found->output == "HEADLESS-1" && found->info.clientRect.Width() == 960 &&
+			found->border == "normal";
+	}, 3s);
+	{
+		const std::optional<SwayWindow> found = findPicture();
+		INFO("picture: " << (found ? found->output : "none") << " client " << (found ? found->info.clientRect.Width() : 0) << "x" << (found ? found->info.clientRect.Height() : 0)
+			<< " frame " << (found ? found->info.frameRect.left : 0) << "," << (found ? found->info.frameRect.top : 0) << " " << (found ? found->info.frameRect.Width() : 0) << "x" << (found ? found->info.frameRect.Height() : 0)
+			<< " floating " << (found && found->isFloating) << " border " << (found ? found->border : ""));
+		REQUIRE(isPictureReady);
+	}
+	const SwayWindow picture = *findPicture();
+	CHECK(picture.output == "HEADLESS-1");
+	CHECK(picture.isFloating);
+	CHECK(picture.info.clientRect.Width() == 960);
+	CHECK(picture.info.clientRect.Height() == 720);
+	REQUIRE(fixture.StepUntil([&] { return session.DestinationRect() == picture.info.clientRect; }));
+	const Rect dest = session.DestinationRect();
+
+	// What the monitor shows there
+	for (const Point pt : { Point{ 160, 120 }, Point{ 480, 120 }, Point{ 160, 360 }, Point{ 480, 360 } }) {
+		const Point onMonitor{ dest.left + pt.x * 960 / 640, dest.top + pt.y * 720 / 480 };
+		INFO("the window's " << pt.x << "," << pt.y << " at " << onMonitor.x << "," << onMonitor.y);
+		CHECK(IsNear(fixture.MonitorPixel(device, onMonitor), TestWindow::ColorAt(size, pt.x, pt.y)));
+	}
+
+	SECTION("the pointer goes to the source and leaves it on every side") {
+		window->TakePointerEvents();
+		const uint32_t capturesBefore = session.GetStatistics().pointerCaptures;
+		REQUIRE(bridge.MovePointer({ dest.left + 480, dest.top + 360 }));
+		REQUIRE(fixture.StepUntil([&] {
+			return session.GetStatistics().pointerCaptures > capturesBefore && window->PointerPos().has_value();
+		}));
+		CHECK(std::abs(window->PointerPos()->x - 320) <= 1);
+		CHECK(std::abs(window->PointerPos()->y - 240) <= 1);
+		// The source has the keyboard while the pointer is on it
+		CHECK(fixture.StepUntil([&] { return session.IsSourceActive(); }));
+
+		// Pushed to the left: out of the source, to the left of the picture
+		const uint32_t releasesBefore = session.GetStatistics().pointerReleases;
+		bridge.Input().MoveRelative(-5000, 0);
+		bridge.Input().Flush();
+		REQUIRE(fixture.StepUntil([&] {
+			return session.GetStatistics().pointerReleases > releasesBefore && !window->PointerPos().has_value();
+		}));
+	}
+
+	SECTION("closing the window with the picture ends scaling") {
+		fixture.sway->Command("[con_id=" + picture.info.id + "] kill");
+		CHECK_FALSE(fixture.StepUntil([] { return false; }, 3s));
+		CHECK(session.GetEndReason() == ScalingSession::EndReason::WindowClosed);
+	}
+
+	fixture.monitor.reset();
+	session.Stop();
+	CHECK(bridge.ListOutputs().size() == 1);
+	CHECK(fixture.WaitFor([&] { return !findPicture().has_value(); }));
+	const SwayWindow after = fixture.Find("source");
+	CHECK(after.info.id == before.info.id);
+	CHECK(after.output == "HEADLESS-1");
+	CHECK(after.info.frameRect == before.info.frameRect);
+	CHECK(after.border == before.border);
+}
+
+TEST_CASE("The pointer leaves a fullscreen picture on Sway towards another monitor", "[sway][desktop][session]") {
+	SessionFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& bridge = fixture.bridge;
+	ScalingSession& session = fixture.session;
+
+	// A second monitor to the right of the first
+	REQUIRE(fixture.sway->Command("create_output"));
+	REQUIRE(fixture.sway->Command("output HEADLESS-2 mode --custom 1280x720@60Hz position 1920 0"));
+	REQUIRE(fixture.WaitFor([&] { return bridge.ListOutputs().size() == 2; }));
+
+	const auto window = fixture.OpenWindow({ .title = "source" });
+	// A new window opens on the output that has the focus
+	SwayWindow before = fixture.Find("source");
+	if (before.output != "HEADLESS-1") {
+		REQUIRE(fixture.sway->Command("[con_id=" + before.info.id + "] move container to output HEADLESS-1"));
+		before = fixture.Find("source");
+	}
+	REQUIRE(before.output == "HEADLESS-1");
+
+	REQUIRE(session.Start(bridge, before.info.id, fixture.options, fixture.config) == ScalingError::NoError);
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// The output of the source has a strip on the side of the other monitor
+	std::vector<OutputInfo> outputs = bridge.ListOutputs();
+	REQUIRE(outputs.size() == 3);
+	for (const OutputInfo& output : outputs) {
+		if (output.isVirtual) {
+			CHECK(output.name == "HEADLESS-3");
+			CHECK(output.rect.Width() == 641);
+			CHECK(output.rect.Height() == 480);
+			// The rate of the monitor that shows the picture
+			CHECK(output.refreshRate == 120'000);
+		} else if (output.name == "HEADLESS-2") {
+			// The other monitor has stayed where it was
+			CHECK(output.rect == Rect{ 1920, 0, 3200, 720 });
+		}
+	}
+	CHECK(session.DestinationRect() == Rect{ 240, 0, 1680, 1080 });
+
+	// Onto the picture, then pushed to the right
+	window->TakePointerEvents();
+	const uint32_t capturesBefore = session.GetStatistics().pointerCaptures;
+	REQUIRE(bridge.MovePointer({ 960, 300 }));
+	REQUIRE(fixture.StepUntil([&] {
+		return session.GetStatistics().pointerCaptures > capturesBefore && window->PointerPos().has_value();
+	}));
+	CHECK(std::abs(window->PointerPos()->y - 300 * 480 / 1080) <= 1);
+
+	bridge.Input().MoveRelative(5000, 0);
+	bridge.Input().Flush();
+	REQUIRE(fixture.StepUntil([&] {
+		return session.GetStatistics().pointerReleases >= 1 && !window->PointerPos().has_value();
+	}));
+	CHECK(session.IsRunning());
+
+	// It is on the other monitor now. A step back to the left brings it onto
+	// the picture again, and from there to the source.
+	const uint32_t capturesAfterRelease = session.GetStatistics().pointerCaptures;
+	bridge.Input().MoveRelative(-100, 0);
+	bridge.Input().Flush();
+	REQUIRE(fixture.StepUntil([&] {
+		return session.GetStatistics().pointerCaptures > capturesAfterRelease && window->PointerPos().has_value();
+	}));
+	// At the right edge of the picture, at the height it left
+	CHECK(window->PointerPos()->x >= 600);
+	CHECK(std::abs(window->PointerPos()->y - 300 * 480 / 1080) <= 2);
+
+	session.Stop();
+	outputs = bridge.ListOutputs();
+	CHECK(outputs.size() == 2);
+	const SwayWindow after = fixture.Find("source");
+	CHECK(after.output == "HEADLESS-1");
+	CHECK(after.info.frameRect == before.info.frameRect);
 }
 
 TEST_CASE("What a scaling session on Sway left behind is undone", "[sway][desktop][session]") {

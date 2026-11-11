@@ -90,6 +90,13 @@ target_compile_options(magpie_engine_tests PRIVATE -Wno-missing-field-initialize
 
 catch_discover_tests(magpie_engine_tests PROPERTIES LABELS gpu TIMEOUT 600)
 
+# The scaling service in a Sway that the script starts itself and that shows
+# nothing, driven from the outside with magpie-ctl. Skips itself without a
+# program "sway".
+add_test(NAME sway-service
+	COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sway_service_test.sh ${CMAKE_BINARY_DIR} ${MAGPIE_EFFECTS_DIR})
+set_tests_properties(sway-service PROPERTIES LABELS gpu TIMEOUT 300 SKIP_RETURN_CODE 77)
+
 # Every bundled effect in every combination of FP16 mode and inline parameters.
 # Takes about a minute on a twelve-thread machine.
 add_test(NAME effects-compile-all

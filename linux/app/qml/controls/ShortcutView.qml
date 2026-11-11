@@ -1,7 +1,8 @@
-// The key of a global shortcut and a button for changing it. The desktop
-// owns the keys, so the button opens its dialog. Counterpart of
-// ShortcutControl of the Windows user interface, which records the keys
-// itself.
+// The key of a global shortcut and a button for changing it. Where the
+// desktop owns the keys, the button opens its dialog; where it has no such
+// dialog, the keys are those of config.json and there is no button.
+// Counterpart of ShortcutControl of the Windows user interface, which records
+// the keys itself.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -14,6 +15,8 @@ RowLayout {
     property string key
     // The desktop registered the shortcuts
     property bool available: true
+    // The desktop has a dialog for the keys
+    property bool canChange: true
     signal changeRequested
 
     spacing: 8
@@ -27,6 +30,7 @@ RowLayout {
 
     Button {
         text: qsTrId("Linux_Shortcut_Change")
+        visible: root.canChange
         enabled: root.available
         onClicked: root.changeRequested()
 

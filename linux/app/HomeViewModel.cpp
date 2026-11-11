@@ -51,6 +51,10 @@ bool HomeViewModel::HasShortcuts() const {
 	return _scaling.HasShortcuts();
 }
 
+bool HomeViewModel::CanConfigureShortcuts() const {
+	return _scaling.CanConfigureShortcuts();
+}
+
 void HomeViewModel::configureShortcuts() {
 	_scaling.ConfigureShortcuts();
 }

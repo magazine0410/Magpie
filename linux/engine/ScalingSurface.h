@@ -65,14 +65,21 @@ public:
 	// Opens a Wayland connection of its own and prepares a window whose
 	// content has this size. The window appears with its first frame. The
 	// user can make it smaller down to `minSize`.
+	// With `startsFixed` the window says at first that it cannot be resized,
+	// until ReleaseFixedSize: a desktop that tiles windows then leaves it
+	// its size and lets it float.
 	bool CreateWindow(
 		const std::string& displayName,
 		const std::string& title,
 		const std::string& appId,
 		Size size,
 		Size minSize,
-		SizeRule sizeRule
+		SizeRule sizeRule,
+		bool startsFixed = false
 	) noexcept;
+
+	// From now on the user can resize the window, down to its minimum size
+	void ReleaseFixedSize() noexcept;
 
 	// Processes the events that have arrived without waiting for more.
 	// Returns false when the connection is lost.

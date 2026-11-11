@@ -149,8 +149,9 @@ struct ImageCopyFrameSource::State {
 			}
 			ReleaseBuffer();
 
-			// Rows start at multiples of four bytes, as compositors expect
-			stride = ((size_t)size.width * layout.bytesPerPixel + 3) & ~size_t(3);
+			// Rows follow each other without padding: wlroots refuses a
+			// row length that is no multiple of the bytes of a pixel
+			stride = (size_t)size.width * layout.bytesPerPixel;
 			dataSize = stride * (size_t)size.height;
 			const int fd = memfd_create("magpie-capture", MFD_CLOEXEC);
 			if (fd < 0 || ftruncate(fd, (off_t)dataSize) != 0) {
@@ -471,7 +472,14 @@ bool ImageCopyFrameSource::Dispatch() noexcept {
 		wl_display_cancel_read(display);
 	}
 	if (wl_display_dispatch_pending(display) < 0) {
-		Logger::Get().Error("The Wayland connection for the capture is lost");
+		// What the compositor objected to, if it ended the connection itself
+		const wl_interface* interface = nullptr;
+		uint32_t id = 0;
+		const int error = wl_display_get_error(display);
+		const uint32_t code = error == EPROTO ? wl_display_get_protocol_error(display, &interface, &id) : 0;
+		Logger::Get().Error(error == EPROTO ?
+			fmt::format("The compositor ended the capture: error {} of {}", code, interface ? interface->name : "?") :
+			fmt::format("The Wayland connection for the capture is lost: {}", std::strerror(error)));
 		state.failed = true;
 		return false;
 	}

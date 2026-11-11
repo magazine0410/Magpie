@@ -53,6 +53,10 @@ struct ScalingSurface::State {
 	xdg_toplevel* toplevel = nullptr;
 
 	Size size;
+	// How small the user may make a window, and whether it still says
+	// that it cannot be resized at all
+	Size minSize;
+	bool isFixedSizeHeld = false;
 	// What the last toplevel configure event proposed; applied when the
 	// configure sequence ends
 	Size proposedSize;
@@ -395,7 +399,8 @@ bool ScalingSurface::CreateWindow(
 	const std::string& appId,
 	Size size,
 	Size minSize,
-	SizeRule sizeRule
+	SizeRule sizeRule,
+	bool startsFixed
 ) noexcept {
 	State& state = *_state;
 	if (!state.Connect(displayName)) {
@@ -416,7 +421,14 @@ bool ScalingSurface::CreateWindow(
 	xdg_toplevel_add_listener(state.toplevel, &State::TOPLEVEL_LISTENER, &state);
 	xdg_toplevel_set_title(state.toplevel, title.c_str());
 	xdg_toplevel_set_app_id(state.toplevel, appId.c_str());
-	xdg_toplevel_set_min_size(state.toplevel, minSize.width, minSize.height);
+	state.minSize = minSize;
+	if (startsFixed) {
+		xdg_toplevel_set_min_size(state.toplevel, size.width, size.height);
+		xdg_toplevel_set_max_size(state.toplevel, size.width, size.height);
+		state.isFixedSizeHeld = true;
+	} else {
+		xdg_toplevel_set_min_size(state.toplevel, minSize.width, minSize.height);
+	}
 
 	if (state.decorationManager) {
 		// Title bar and borders from the desktop
@@ -429,6 +441,18 @@ bool ScalingSurface::CreateWindow(
 	wl_surface_commit(state.surface);
 
 	return state.WaitForConfigure();
+}
+
+void ScalingSurface::ReleaseFixedSize() noexcept {
+	State& state = *_state;
+	if (!state.isFixedSizeHeld || !state.toplevel) {
+		return;
+	}
+	state.isFixedSizeHeld = false;
+	// Takes effect with the next frame
+	xdg_toplevel_set_min_size(state.toplevel, state.minSize.width, state.minSize.height);
+	xdg_toplevel_set_max_size(state.toplevel, 0, 0);
+	wl_display_flush(state.display);
 }
 
 bool ScalingSurface::PumpEvents() noexcept {
