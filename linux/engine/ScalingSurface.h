@@ -130,6 +130,11 @@ public:
 	// Gives a window another title
 	void SetTitle(const std::string& title) noexcept;
 
+	// Asks the compositor not to blank the screen or start the screen saver
+	// while the surface is shown (the protocol idle-inhibit). Returns false
+	// if the compositor does not offer that.
+	bool InhibitIdle() noexcept;
+
 	// Processes the events that have arrived without waiting for more.
 	// Returns false when the connection is lost.
 	bool PumpEvents() noexcept;

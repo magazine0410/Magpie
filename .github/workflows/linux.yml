@@ -43,6 +43,7 @@ jobs:
           fontconfig-devel dejavu-sans-fonts
           mesa-vulkan-drivers vulkan-validation-layers
           qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qttools-devel qt6-linguist qt6-qtsvg python3
+          libxkbcommon-devel
 
       - uses: actions/checkout@v4
 
@@ -60,6 +61,9 @@ jobs:
       # themselves.
       # The tests of the settings application (label "app") load its window
       # with Qt's platform "offscreen", which needs no display.
+      # The tests of the Sway back end and of the nested session start a Sway
+      # of their own. It is not installed here, so they skip themselves; they
+      # have only been run on a machine with a graphics card.
       # The test labelled "slow" compiles every effect in six combinations.
       # The compiler is the same binary in both build types, so once is enough.
       - name: Test

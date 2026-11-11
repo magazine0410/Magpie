@@ -324,6 +324,11 @@ ScalingError ScalingSession::_StartScaling() noexcept {
 		_inhibitor = std::make_unique<SessionInhibitor>();
 		if (_options.IsKeepScreenOn()) {
 			_inhibitor->KeepScreenOn("A window is scaled");
+			// Also the compositor's own way, for desktops whose session bus
+			// has no screen saver service, such as Sway's
+			for (const View& view : _views) {
+				view.surface->InhibitIdle();
+			}
 		}
 		if (_options.IsSimulateExclusiveFullscreen()) {
 			_inhibitor->SuppressNotifications(_config.appId, "A window is scaled to fullscreen");

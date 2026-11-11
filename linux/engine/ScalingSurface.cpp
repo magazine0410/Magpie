@@ -10,6 +10,7 @@
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 #include "Logger.h"
+#include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
@@ -49,6 +50,8 @@ struct ScalingSurface::State {
 	wl_pointer* pointer = nullptr;
 	wl_keyboard* keyboard = nullptr;
 	zwp_pointer_constraints_v1* pointerConstraints = nullptr;
+	zwp_idle_inhibit_manager_v1* idleInhibitManager = nullptr;
+	zwp_idle_inhibitor_v1* idleInhibitor = nullptr;
 	zwp_relative_pointer_manager_v1* relativePointerManager = nullptr;
 	zwp_relative_pointer_v1* relativePointer = nullptr;
 	zwp_locked_pointer_v1* lockedPointer = nullptr;
@@ -458,6 +461,9 @@ struct ScalingSurface::State {
 			} else if (std::strcmp(interface, zwp_pointer_constraints_v1_interface.name) == 0) {
 				state.pointerConstraints = (zwp_pointer_constraints_v1*)wl_registry_bind(
 					registry, name, &zwp_pointer_constraints_v1_interface, 1);
+			} else if (std::strcmp(interface, zwp_idle_inhibit_manager_v1_interface.name) == 0) {
+				state.idleInhibitManager = (zwp_idle_inhibit_manager_v1*)wl_registry_bind(
+					registry, name, &zwp_idle_inhibit_manager_v1_interface, 1);
 			} else if (std::strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0) {
 				state.relativePointerManager = (zwp_relative_pointer_manager_v1*)wl_registry_bind(
 					registry, name, &zwp_relative_pointer_manager_v1_interface, 1);
@@ -620,6 +626,20 @@ void ScalingSurface::SetTitle(const std::string& title) noexcept {
 		xdg_toplevel_set_title(_state->toplevel, title.c_str());
 		wl_display_flush(_state->display);
 	}
+}
+
+bool ScalingSurface::InhibitIdle() noexcept {
+	State& state = *_state;
+	if (state.idleInhibitor) {
+		return true;
+	}
+	if (!state.idleInhibitManager || !state.surface) {
+		return false;
+	}
+	// Ends with the surface
+	state.idleInhibitor = zwp_idle_inhibit_manager_v1_create_inhibitor(state.idleInhibitManager, state.surface);
+	wl_display_flush(state.display);
+	return state.idleInhibitor != nullptr;
 }
 
 bool ScalingSurface::PumpEvents() noexcept {

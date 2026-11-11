@@ -188,6 +188,12 @@ bool NestedCompositor::Start(const Options& options, std::string& error) noexcep
 		std::this_thread::sleep_for(20ms);
 	}
 
+	if (const std::string missing = _bridge->MissingForScaling(); !missing.empty()) {
+		error = "The installed Sway cannot serve a nested session; it lacks " + missing + ".";
+		Logger::Get().Error(error);
+		Stop();
+		return false;
+	}
 	if (!SetOutput(options.size, options.refreshRate)) {
 		error = "The nested session did not take the size that was asked for.";
 		Stop();

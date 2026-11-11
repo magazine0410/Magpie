@@ -326,6 +326,16 @@ struct SwayFixture {
 		}
 	}
 
+	// Sway lists the border a window has after the window has taken note of
+	// a change, which is a moment after the command; this waits for it
+	bool HasBorder(std::string_view title, std::string_view border) {
+		return WaitFor([&] {
+			bridge.ListWindows();
+			const SwayWindow* window = FindByTitle(bridge.Windows(), title);
+			return window && window->border == border;
+		}, 2s);
+	}
+
 	bool WaitFor(const std::function<bool()>& done, milliseconds timeout = 5s) {
 		const auto deadline = steady_clock::now() + timeout;
 		while (!done()) {
@@ -481,10 +491,10 @@ TEST_CASE("The Sway back end places a floating window and puts it back", "[sway]
 		.noBorder = before.info.hasNoBorder,
 		.restore = before.info.restoreData
 	}));
+	CHECK(fixture.HasBorder("floating", "normal"));
 	now = fixture.Find("floating");
 	CHECK(now.info.frameRect == before.info.frameRect);
 	CHECK(now.info.clientRect == before.info.clientRect);
-	CHECK(now.border == "normal");
 	CHECK(now.isFloating);
 
 	CHECK_FALSE(bridge.PlaceWindow("123456", { .frameRect = place }));
@@ -529,9 +539,9 @@ TEST_CASE("The Sway back end puts a tiled window back among the others", "[sway]
 				.noBorder = before.info.hasNoBorder,
 				.restore = before.info.restoreData
 			}));
+			CHECK(fixture.HasBorder(title, before.border));
 			now = fixture.Find(title);
 			CHECK_FALSE(now.isFloating);
-			CHECK(now.border == before.border);
 			CHECK(order() == "abc");
 			// Its share of the workspace too
 			CHECK(now.info.frameRect == before.info.frameRect);
@@ -1035,7 +1045,7 @@ TEST_CASE("A window is scaled to fullscreen on Sway", "[sway][desktop][session]"
 		// Back where it was, with its title bar
 		const SwayWindow after = fixture.Find("source");
 		CHECK(after.output == "HEADLESS-1");
-		CHECK(after.border == before.border);
+		CHECK(fixture.HasBorder("source", before.border));
 		if (session.GetEndReason() != ScalingSession::EndReason::SourceResized) {
 			CHECK(after.info.frameRect == before.info.frameRect);
 		}
@@ -1154,7 +1164,7 @@ TEST_CASE("A window is scaled into a window on Sway", "[sway][desktop][session]"
 	CHECK(after.info.id == before.info.id);
 	CHECK(after.output == "HEADLESS-1");
 	CHECK(after.info.frameRect == before.info.frameRect);
-	CHECK(after.border == before.border);
+	CHECK(fixture.HasBorder("source", before.border));
 }
 
 TEST_CASE("The pointer leaves a fullscreen picture on Sway towards another monitor", "[sway][desktop][session]") {
@@ -1548,7 +1558,7 @@ TEST_CASE("What a scaling session on Sway left behind is undone", "[sway][deskto
 	const SwayWindow after = fixture.Find("source");
 	CHECK(after.output == "HEADLESS-1");
 	CHECK(after.info.frameRect == frame);
-	CHECK(after.border == before.border);
+	CHECK(fixture.HasBorder("source", before.border));
 	CHECK(bridge.ListOutputs().size() == 1);
 	CHECK_FALSE(std::filesystem::exists(fixture.config.stateFile));
 }

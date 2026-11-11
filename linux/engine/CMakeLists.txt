@@ -27,6 +27,8 @@ foreach(xml IN ITEMS
 	# have moved
 	${WAYLAND_PROTOCOLS_DIR}/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml
 	${WAYLAND_PROTOCOLS_DIR}/unstable/relative-pointer/relative-pointer-unstable-v1.xml
+	# Keeping the screen on where the session bus has no service for it
+	${WAYLAND_PROTOCOLS_DIR}/unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)
