@@ -26,7 +26,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # The Linux port is developed on Fedora and uses its package versions.
-    container: fedora:44
+    # SYS_NICE: Fedora's sway has that capability on its file, and a
+    # container without it cannot start the program at all.
+    container:
+      image: fedora:44
+      options: --cap-add SYS_NICE
     strategy:
       matrix:
         build_type: ['RelWithDebInfo', 'Debug']
@@ -44,6 +48,7 @@ jobs:
           mesa-vulkan-drivers vulkan-validation-layers
           qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qttools-devel qt6-linguist qt6-qtsvg python3
           libxkbcommon-devel
+          sway dbus-daemon procps-ng
 
       - uses: actions/checkout@v4
 
@@ -62,8 +67,10 @@ jobs:
       # The tests of the settings application (label "app") load its window
       # with Qt's platform "offscreen", which needs no display.
       # The tests of the Sway back end and of the nested session start a Sway
-      # of their own. It is not installed here, so they skip themselves; they
-      # have only been run on a machine with a graphics card.
+      # of their own, which composes in software here. ctest runs one test at
+      # a time, which they need on the software renderer: it uses every
+      # processor core by itself. The test of the KWin back end needs the
+      # program "kwin_wayland" and a PipeWire session and skips itself.
       # The test labelled "slow" compiles every effect in six combinations.
       # The compiler is the same binary in both build types, so once is enough.
       - name: Test
