@@ -7,6 +7,8 @@
 #include <sstream>
 #include <sys/timerfd.h>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
+#include <fmt/format.h>
 #include <xkbcommon/xkbcommon.h>
 #include "FrameSource.h"
 #include "ImageCopyFrameSource.h"
@@ -1056,6 +1058,162 @@ TEST_CASE("A window is scaled to fullscreen on Sway", "[sway][desktop][session]"
 			CHECK(after.info.frameRect == before.info.frameRect);
 		}
 	}
+}
+
+TEST_CASE("A window is scaled to fullscreen on a monitor with a scale factor", "[sway][desktop][session]") {
+	SessionFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& bridge = fixture.bridge;
+	ScalingSession& session = fixture.session;
+	REQUIRE_FALSE(RenderTest::TestDevices().empty());
+	VulkanDevice& device = *RenderTest::TestDevices()[0].device;
+
+	// The monitor has 1920x1080 pixels in both cases, and fewer units of
+	// desktop coordinates: 960x540 and 1280x720
+	double scale = 0.0;
+	SECTION("200 %") { scale = 2.0; }
+	SECTION("150 %") { scale = 1.5; }
+	CAPTURE(scale);
+	fixture.sway->Command(fmt::format("output HEADLESS-1 scale {}", scale));
+	REQUIRE(fixture.WaitFor([&] {
+		const std::vector<OutputInfo> outputs = bridge.ListOutputs();
+		return outputs.size() == 1 && outputs[0].scale == scale &&
+			outputs[0].rect.Width() == (int32_t)std::lround(1920 / scale);
+	}));
+
+	const Size size{ 640, 480 };
+	const auto window = fixture.OpenWindow({ .title = "source" });
+	const SwayWindow before = fixture.Find("source");
+	REQUIRE(bridge.MovePointer({ (int32_t)(1900 / scale), 20 }));
+
+	REQUIRE(session.Start(bridge, before.info.id, fixture.options, fixture.config) == ScalingError::NoError);
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// The window is on an output without a scale factor, with its own pixels
+	const SwayWindow scaled = fixture.Find("source");
+	CHECK(scaled.output == "HEADLESS-2");
+	CHECK(scaled.info.frameRect.Width() == 640);
+	CHECK(scaled.info.frameRect.Height() == 480);
+	// The picture in desktop coordinates: 4:3 in the middle of 16:9
+	const Rect expected{
+		(int32_t)(240 / scale), 0, (int32_t)(1680 / scale), (int32_t)(1080 / scale)
+	};
+	CHECK(session.DestinationRect() == expected);
+
+	// The monitor shows it with all its pixels, as without a scale factor:
+	// black beside the picture and the four quarters of the window in it
+	CHECK(IsNear(fixture.MonitorPixel(device, { 100, 500 }), { 0, 0, 0 }));
+	CHECK(IsNear(fixture.MonitorPixel(device, { 1800, 500 }), { 0, 0, 0 }));
+	for (const Point pt : { Point{ 160, 120 }, Point{ 480, 120 }, Point{ 160, 360 }, Point{ 480, 360 } }) {
+		const Point onMonitor{ 240 + pt.x * 1440 / 640, pt.y * 1080 / 480 };
+		INFO("the window's " << pt.x << "," << pt.y << " at " << onMonitor.x << "," << onMonitor.y);
+		CHECK(IsNear(fixture.MonitorPixel(device, onMonitor), TestWindow::ColorAt(size, pt.x, pt.y)));
+	}
+	// The edges are sharp: a pixel beside the picture is black, the next
+	// one has the colour of the window's edge
+	CHECK(IsNear(fixture.MonitorPixel(device, { 239, 300 }), { 0, 0, 0 }));
+	CHECK(IsNear(fixture.MonitorPixel(device, { 241, 300 }), TestWindow::ColorAt(size, 0, 133)));
+	CHECK(IsNear(fixture.MonitorPixel(device, { 1679, 300 }), TestWindow::ColorAt(size, 639, 133)));
+	CHECK(IsNear(fixture.MonitorPixel(device, { 1681, 300 }), { 0, 0, 0 }));
+
+	// The pointer, moved to the middle of the picture in desktop
+	// coordinates, goes to the middle of the window
+	window->TakePointerEvents();
+	REQUIRE(bridge.MovePointer({ (int32_t)((240 + 720) / scale), (int32_t)(540 / scale) }));
+	REQUIRE(fixture.StepUntil([&] {
+		return session.GetStatistics().pointerCaptures >= 1 && window->PointerPos().has_value();
+	}));
+	const Point pos = *window->PointerPos();
+	CHECK(std::abs(pos.x - 320) <= 1);
+	CHECK(std::abs(pos.y - 240) <= 1);
+	// and the cursor is drawn there, in the monitor's pixels
+	REQUIRE(fixture.StepUntil([&] {
+		return IsNear(fixture.MonitorPixel(device, { 240 + pos.x * 1440 / 640 + 8, pos.y * 1080 / 480 + 8 }),
+			{ TestWindow::CURSOR_RGBA[0], TestWindow::CURSOR_RGBA[1], TestWindow::CURSOR_RGBA[2] });
+	}));
+
+	fixture.monitor.reset();
+	session.Stop();
+	CHECK(bridge.ListOutputs().size() == 1);
+	const SwayWindow after = fixture.Find("source");
+	CHECK(after.output == "HEADLESS-1");
+	CHECK(after.info.frameRect == before.info.frameRect);
+}
+
+TEST_CASE("A window is scaled into a window on a monitor with a scale factor", "[sway][desktop][session]") {
+	SessionFixture fixture;
+	REQUIRE_SWAY(fixture);
+	SwayBridge& bridge = fixture.bridge;
+	ScalingSession& session = fixture.session;
+	REQUIRE_FALSE(RenderTest::TestDevices().empty());
+	VulkanDevice& device = *RenderTest::TestDevices()[0].device;
+
+	fixture.sway->Command("output HEADLESS-1 scale 2");
+	REQUIRE(fixture.WaitFor([&] {
+		const std::vector<OutputInfo> outputs = bridge.ListOutputs();
+		return outputs.size() == 1 && outputs[0].scale == 2.0;
+	}));
+
+	const Size size{ 640, 480 };
+	const auto window = fixture.OpenWindow({ .title = "source" });
+	const SwayWindow before = fixture.Find("source");
+
+	fixture.options.flags |= ScalingFlags::WindowedMode;
+	fixture.options.initialWindowedScaleFactor = 1.5f;
+	REQUIRE(session.Start(bridge, before.info.id, fixture.options, fixture.config) == ScalingError::NoError);
+	REQUIRE(fixture.StepUntil([&] { return session.GetStatistics().presentedFrames >= 1; }));
+
+	// The picture has one and a half times the pixels of the source, 960x720,
+	// which on this monitor is a window of 480x360
+	const auto findPicture = [&]() -> std::optional<SwayWindow> {
+		bridge.ListWindows();
+		for (const SwayWindow& candidate : bridge.Windows()) {
+			if (candidate.info.title == "source" && candidate.info.id != before.info.id) {
+				return candidate;
+			}
+		}
+		return std::nullopt;
+	};
+	const bool isPictureReady = fixture.StepUntil([&] {
+		const std::optional<SwayWindow> found = findPicture();
+		return found && found->output == "HEADLESS-1" && found->info.clientRect.Width() == 480 &&
+			found->border == "normal";
+	}, 3s);
+	{
+		const std::optional<SwayWindow> found = findPicture();
+		INFO("picture: " << (found ? found->output : "none") << " client "
+			<< (found ? found->info.clientRect.Width() : 0) << "x" << (found ? found->info.clientRect.Height() : 0)
+			<< " at " << (found ? found->info.clientRect.left : 0) << "," << (found ? found->info.clientRect.top : 0)
+			<< " border " << (found ? found->border : ""));
+		REQUIRE(isPictureReady);
+	}
+	const SwayWindow picture = *findPicture();
+	CHECK(picture.info.clientRect.Height() == 360);
+	REQUIRE(fixture.StepUntil([&] { return session.DestinationRect() == picture.info.clientRect; }));
+
+	// The monitor shows it with two of its pixels for each unit
+	const Rect client = picture.info.clientRect;
+	for (const Point pt : { Point{ 160, 120 }, Point{ 480, 120 }, Point{ 160, 360 }, Point{ 480, 360 } }) {
+		const Point onMonitor{ client.left * 2 + pt.x * 960 / 640, client.top * 2 + pt.y * 720 / 480 };
+		INFO("the window's " << pt.x << "," << pt.y << " at " << onMonitor.x << "," << onMonitor.y);
+		CHECK(IsNear(fixture.MonitorPixel(device, onMonitor), TestWindow::ColorAt(size, pt.x, pt.y)));
+	}
+
+	// The pointer on the picture goes to the place of the window it shows
+	window->TakePointerEvents();
+	REQUIRE(bridge.MovePointer({ client.left + 120, client.top + 90 }));
+	REQUIRE(fixture.StepUntil([&] {
+		return session.GetStatistics().pointerCaptures >= 1 && window->PointerPos().has_value();
+	}));
+	const Point pos = *window->PointerPos();
+	CHECK(std::abs(pos.x - 160) <= 1);
+	CHECK(std::abs(pos.y - 120) <= 1);
+
+	fixture.monitor.reset();
+	session.Stop();
+	const SwayWindow after = fixture.Find("source");
+	CHECK(after.output == "HEADLESS-1");
+	CHECK(after.info.frameRect == before.info.frameRect);
 }
 
 TEST_CASE("A window is scaled into a window on Sway", "[sway][desktop][session]") {

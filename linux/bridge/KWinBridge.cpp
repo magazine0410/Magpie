@@ -18,6 +18,7 @@
 #include "Logger.h"
 #include "fake-input-client-protocol.h"
 #include "plasma-window-management-client-protocol.h"
+#include "xdg-output-unstable-v1-client-protocol.h"
 #include "zkde-screencast-unstable-v1-client-protocol.h"
 
 extern char** environ;
@@ -51,18 +52,57 @@ struct KWinBridge::Connection {
 	};
 
 	struct Output {
+		// Name and refresh rate; the rectangle and the scale are worked out
+		// from what follows (Info)
 		OutputInfo info;
 		wl_output* proxy = nullptr;
+		zxdg_output_v1* xdgOutput = nullptr;
 		// The number the registry announced it with
 		uint32_t registryName = 0;
 		bool isComplete = false;
+		// From wl_output: the place, and the size of the mode in pixels
+		Point position;
+		Size modeSize;
+		// From xdg_output: place and size in desktop coordinates; without a
+		// scale factor the same as the two above
+		Point logicalPosition;
+		Size logicalSize;
+
+		OutputInfo Info() const noexcept {
+			OutputInfo result = info;
+			if (logicalSize.width > 0 && logicalSize.height > 0) {
+				result.rect = {
+					logicalPosition.x, logicalPosition.y,
+					logicalPosition.x + logicalSize.width, logicalPosition.y + logicalSize.height
+				};
+				// The longer sides, so that a turned output gives the same
+				result.scale = (double)std::max(modeSize.width, modeSize.height) /
+					std::max(logicalSize.width, logicalSize.height);
+			} else {
+				result.rect = { position.x, position.y, position.x + modeSize.width, position.y + modeSize.height };
+			}
+			return result;
+		}
 	};
+
+	// Asks for the place and size of an output in desktop coordinates
+	void AddXdgOutput(Output& output) noexcept {
+		if (xdgOutputManager && !output.xdgOutput) {
+			output.xdgOutput = zxdg_output_manager_v1_get_xdg_output(xdgOutputManager, output.proxy);
+			zxdg_output_v1_add_listener(output.xdgOutput, &XDG_OUTPUT_LISTENER, &output);
+		}
+	}
+
+	static const zxdg_output_v1_listener XDG_OUTPUT_LISTENER;
 
 	~Connection() {
 		for (const std::unique_ptr<Window>& window : windows) {
 			org_kde_plasma_window_destroy(window->proxy);
 		}
 		for (const std::unique_ptr<Output>& output : outputs) {
+			if (output->xdgOutput) {
+				zxdg_output_v1_destroy(output->xdgOutput);
+			}
 			wl_output_destroy(output->proxy);
 		}
 		if (windowManagement) {
@@ -134,6 +174,7 @@ struct KWinBridge::Connection {
 	zkde_screencast_unstable_v1* screencast = nullptr;
 	uint32_t screencastVersion = 0;
 	org_kde_kwin_fake_input* fakeInput = nullptr;
+	zxdg_output_manager_v1* xdgOutputManager = nullptr;
 
 	std::vector<std::unique_ptr<Window>> windows;
 	std::vector<std::unique_ptr<Output>> outputs;
@@ -146,17 +187,13 @@ struct KWinBridge::Connection {
 const wl_output_listener KWinBridge::Connection::OUTPUT_LISTENER{
 	.geometry = [](void* data, wl_output*, int32_t x, int32_t y, int32_t, int32_t, int32_t,
 		const char*, const char*, int32_t) {
-		Rect& rect = ((Output*)data)->info.rect;
-		rect = { x, y, x + rect.Width(), y + rect.Height() };
+		((Output*)data)->position = { x, y };
 	},
 	.mode = [](void* data, wl_output*, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
 		if (flags & WL_OUTPUT_MODE_CURRENT) {
-			OutputInfo& info = ((Output*)data)->info;
-			// With a scale factor other than 1 the size in desktop
-			// coordinates differs from this; that is not handled yet
-			info.rect.right = info.rect.left + width;
-			info.rect.bottom = info.rect.top + height;
-			info.refreshRate = refresh;
+			Output& output = *(Output*)data;
+			output.modeSize = { width, height };
+			output.info.refreshRate = refresh;
 		}
 	},
 	.done = [](void* data, wl_output*) {
@@ -167,6 +204,18 @@ const wl_output_listener KWinBridge::Connection::OUTPUT_LISTENER{
 		((Output*)data)->info.name = name;
 	},
 	.description = [](void*, wl_output*, const char*) {}
+};
+
+const zxdg_output_v1_listener KWinBridge::Connection::XDG_OUTPUT_LISTENER{
+	.logical_position = [](void* data, zxdg_output_v1*, int32_t x, int32_t y) {
+		((Output*)data)->logicalPosition = { x, y };
+	},
+	.logical_size = [](void* data, zxdg_output_v1*, int32_t width, int32_t height) {
+		((Output*)data)->logicalSize = { width, height };
+	},
+	.done = [](void*, zxdg_output_v1*) {},
+	.name = [](void*, zxdg_output_v1*, const char*) {},
+	.description = [](void*, zxdg_output_v1*, const char*) {}
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -268,14 +317,25 @@ const wl_registry_listener KWinBridge::Connection::REGISTRY_LISTENER{
 			output->registryName = name;
 			output->proxy = (wl_output*)wl_registry_bind(registry, name, &wl_output_interface, OUTPUT_VERSION);
 			wl_output_add_listener(output->proxy, &OUTPUT_LISTENER, output.get());
+			connection.AddXdgOutput(*output);
 			connection.outputs.push_back(std::move(output));
+		} else if (std::strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
+			connection.xdgOutputManager = (zxdg_output_manager_v1*)wl_registry_bind(registry, name,
+				&zxdg_output_manager_v1_interface, std::min(version, 3u));
+			// For the outputs that were announced before it
+			for (const std::unique_ptr<Output>& output : connection.outputs) {
+				connection.AddXdgOutput(*output);
+			}
 		}
 	},
 	.global_remove = [](void* data, wl_registry*, uint32_t name) {
 		Connection& connection = *(Connection*)data;
 		std::erase_if(connection.outputs, [&](const std::unique_ptr<Output>& output) {
 			if (output->registryName == name) {
-				wl_output_destroy(output->proxy);
+				if (output->xdgOutput) {
+				zxdg_output_v1_destroy(output->xdgOutput);
+			}
+			wl_output_destroy(output->proxy);
 				return true;
 			}
 			return false;
@@ -500,7 +560,7 @@ std::vector<OutputInfo> KWinBridge::ListOutputs() noexcept {
 
 	for (const std::unique_ptr<Connection::Output>& output : _connection->outputs) {
 		if (output->isComplete) {
-			result.push_back(output->info);
+			result.push_back(output->Info());
 			// The name KWin gives the outputs of its screen cast protocol
 			result.back().isVirtual = output->info.name.starts_with("Virtual-");
 		}

@@ -86,6 +86,9 @@ struct OutputInfo {
 	int32_t refreshRate = 0;
 	// No monitor shows it
 	bool isVirtual = false;
+	// How many of the output's pixels one unit of desktop coordinates is:
+	// 1.5 for a monitor set to 150 %
+	double scale = 1.0;
 };
 
 // Where DesktopBridge::PlaceWindow puts a window

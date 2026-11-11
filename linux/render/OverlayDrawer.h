@@ -48,6 +48,9 @@ public:
 		bool showDynamicDetectionStatistics = false;
 		// Whether the source can be minimized by the toolbar
 		bool canMinimizeSource = true;
+		// The scale factor of the monitor, by which texts and controls are
+		// enlarged. Counterpart of the DPI scaling of the Windows version.
+		float dpiScale = 1.0f;
 	};
 
 	// The pointer and the numbers of one frame

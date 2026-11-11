@@ -35,6 +35,17 @@ namespace SwayTest {
 using namespace Magpie;
 using namespace std::chrono_literals;
 
+// Whether the machine has a graphics card that programs can render with
+inline bool HasRenderNode() {
+	std::error_code ec;
+	for (const auto& entry : std::filesystem::directory_iterator("/dev/dri", ec)) {
+		if (entry.path().filename().string().starts_with("renderD")) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Whether there is a program "sway" to start
 inline bool IsSwayInstalled() {
 	const char* path = std::getenv("PATH");
@@ -75,6 +86,11 @@ public:
 			setenv("SWAYSOCK", _socketPath.c_str(), 1);
 			setenv("WLR_BACKENDS", "headless", 1);
 			setenv("WLR_LIBINPUT_NO_DEVICES", "1", 1);
+			if (!HasRenderNode()) {
+				// A machine without a graphics card, such as a container:
+				// Sway composes in software
+				setenv("WLR_RENDERER", "pixman", 0);
+			}
 			unsetenv("WAYLAND_DISPLAY");
 			unsetenv("DISPLAY");
 			// MAGPIE_TEST_SWAY_LOG names a file that gets Sway's detailed log

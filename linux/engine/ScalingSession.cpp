@@ -1,5 +1,6 @@
 #include "ScalingSession.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -311,7 +312,8 @@ ScalingError ScalingSession::_StartScaling() noexcept {
 			.isDeveloperMode = _options.IsDeveloperMode(),
 			.showDynamicDetectionStatistics = _options.IsStatisticsForDynamicDetectionEnabled() &&
 				_options.duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Dynamic,
-			.canMinimizeSource = _traits.canMinimize
+			.canMinimizeSource = _traits.canMinimize,
+			.dpiScale = (float)_views[0].surface->Scale()
 		}, _options.overlayOptions, _chain->ActiveEffectDescs())) {
 			_overlay->SetToolbarState(_options.IsWindowedMode() ?
 				_options.windowedInitialToolbarState : _options.fullscreenInitialToolbarState);
@@ -675,6 +677,7 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 			return false;
 		}
 		// The size the desktop gave a fullscreen window is that of its monitor
+		_pictureScale = surface->Scale();
 		const Size actual = surface->GetSize();
 		_rendererRect = { 0, 0, actual.width, actual.height };
 		if (_options.IsWindowedMode()) {
@@ -687,10 +690,27 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 		// One surface per monitor; together they show one picture
 		for (const OutputInfo& monitor : _monitors) {
 			auto surface = std::make_unique<ScalingSurface>();
-			if (!surface->CreateLayer(_bridge->WaylandDisplay(), monitor.name, !_options.IsTopmostDisabled()) ||
-				!_AddView(std::move(surface), monitor.rect)) {
+			if (!surface->CreateLayer(_bridge->WaylandDisplay(), monitor.name, !_options.IsTopmostDisabled(),
+				monitor.scale)) {
 				return false;
 			}
+			if (_views.empty()) {
+				_pictureScale = surface->Scale();
+			} else if (surface->Scale() != _pictureScale) {
+				// One picture needs one size of pixel
+				Logger::Get().Warn(fmt::format("{} has another scale factor than {} and is left out of the picture",
+					monitor.name, _monitors[0].name));
+				continue;
+			}
+			const Size size = surface->GetSize();
+			const Point origin = _ToPicture({ monitor.rect.left, monitor.rect.top });
+			if (!_AddView(std::move(surface), { origin.x, origin.y, origin.x + size.width, origin.y + size.height })) {
+				return false;
+			}
+		}
+		_rendererRect = _views[0].rect;
+		for (const View& view : _views) {
+			_rendererRect = Union(_rendererRect, view.rect);
 		}
 		return true;
 	}
@@ -702,12 +722,17 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 	for (const OutputInfo& monitor : _otherMonitors) {
 		bounds = Union(bounds, monitor.rect);
 	}
+	// Sizes of the picture are in its pixels, of which the monitor has more
+	// than units if it has a scale factor
+	_pictureScale = _monitors[0].scale;
+	const Point maxSize = _ToPicture({ bounds.Width(), bounds.Height() });
 	_minWindowedSize = _srcSize;
-	_maxWindowedSize = { bounds.Width(), bounds.Height() };
+	_maxWindowedSize = { maxSize.x, maxSize.y };
 
 	const Rect& monitor = _monitors[0].rect;
+	const Point monitorSize = _ToPicture({ monitor.Width(), monitor.Height() });
 	Size size;
-	if (!ScalingGeometry::CalcInitialWindowedRendererSize(size, _srcSize, { monitor.Width(), monitor.Height() },
+	if (!ScalingGeometry::CalcInitialWindowedRendererSize(size, _srcSize, { monitorSize.x, monitorSize.y },
 		_options.initialWindowedScaleFactor, _config.lastWindowedWidth, _minWindowedSize, _maxWindowedSize)) {
 		Logger::Get().Error("The window is too large for windowed scaling");
 		error = ScalingError::InvalidSourceWindow;
@@ -720,16 +745,17 @@ bool ScalingSession::_CreateViews(ScalingError& error) noexcept {
 		_minWindowedSize, [this](Size proposed, bool isWidthChanged, bool isHeightChanged) {
 			return ScalingGeometry::CalcResizedWindowedRendererSize(
 				proposed, isWidthChanged, isHeightChanged, _srcSize, _minWindowedSize, _maxWindowedSize);
-		}, _traits.tilesNewWindows)) {
+		}, _traits.tilesNewWindows, false, _monitors[0].scale)) {
 		return false;
 	}
+	_pictureScale = surface->Scale();
 
 	// Where the window is, is known once it has appeared; until then it is
 	// taken to be where the source was
-	const Point centre{
+	const Point centre = _ToPicture({
 		(_original.frameRect.left + _original.frameRect.right) / 2,
 		(_original.frameRect.top + _original.frameRect.bottom) / 2
-	};
+	});
 	_rendererRect = {
 		centre.x - size.width / 2, centre.y - size.height / 2,
 		centre.x - size.width / 2 + size.width, centre.y - size.height / 2 + size.height
@@ -767,7 +793,14 @@ bool ScalingSession::_PlaceOwnWindow() noexcept {
 	// The content gets the centre that the source had, as on Windows, but
 	// the window stays on its monitor if it fits there. The title bar wins
 	// over the bottom edge.
-	const Rect& content = _rendererRect;
+	const Point contentOrigin = _ToDesktop({ _rendererRect.left, _rendererRect.top });
+	const Point contentSize{
+		(int32_t)std::lround(_rendererRect.Width() / _pictureScale),
+		(int32_t)std::lround(_rendererRect.Height() / _pictureScale)
+	};
+	const Rect content{
+		contentOrigin.x, contentOrigin.y, contentOrigin.x + contentSize.x, contentOrigin.y + contentSize.y
+	};
 	Rect frame{
 		content.left - (own.clientRect.left - own.frameRect.left),
 		content.top - (own.clientRect.top - own.frameRect.top),
@@ -827,11 +860,11 @@ bool ScalingSession::_TrackOwnWindow() noexcept {
 	// The place from the desktop, the size from the surface, which is ahead
 	// of the desktop while the user resizes
 	View& view = _views[0];
+	// The scale factor is that of the monitor the window is on now
+	_pictureScale = view.surface->Scale();
 	const Size size = view.surface->GetSize();
-	view.rect = {
-		own.clientRect.left, own.clientRect.top,
-		own.clientRect.left + size.width, own.clientRect.top + size.height
-	};
+	const Point origin = _ToPicture({ own.clientRect.left, own.clientRect.top });
+	view.rect = { origin.x, origin.y, origin.x + size.width, origin.y + size.height };
 	_rendererRect = view.rect;
 	return true;
 }
@@ -858,6 +891,20 @@ bool ScalingSession::_WaitForFirstFrame() noexcept {
 			return false;
 		}
 	}
+}
+
+Point ScalingSession::_ToDesktop(Point picture) const noexcept {
+	return {
+		(int32_t)std::floor(picture.x / _pictureScale),
+		(int32_t)std::floor(picture.y / _pictureScale)
+	};
+}
+
+Point ScalingSession::_ToPicture(Point desktop) const noexcept {
+	return {
+		(int32_t)std::lround(desktop.x * _pictureScale),
+		(int32_t)std::lround(desktop.y * _pictureScale)
+	};
 }
 
 Rect ScalingSession::_DestRect() const noexcept {
@@ -1283,7 +1330,7 @@ void ScalingSession::_ReleasePointerToPicture(const Rect& destRect) noexcept {
 	const Point scaled = ClampTo(ScalingGeometry::SrcToScaling(_frameSource->CursorState().pos,
 		_frameSource->SrcRect(), destRect, rendererArea, false), rendererArea);
 	_SetPointerSlowed(false, destRect);
-	_bridge->MovePointer({ _rendererRect.left + scaled.x, _rendererRect.top + scaled.y });
+	_bridge->MovePointer(_ToDesktop({ _rendererRect.left + scaled.x, _rendererRect.top + scaled.y }));
 }
 
 // Port of the capture logic of CursorManager for a pointer that is either on
@@ -1342,7 +1389,7 @@ void ScalingSession::_UpdatePointer(const Rect& destRect) noexcept {
 			outside.y = std::max(outside.y, srcRect.bottom);
 		}
 		const Point scaled = ScalingGeometry::SrcToScaling(outside, srcRect, destRect, rendererArea, true);
-		const Point target{ _rendererRect.left + scaled.x, _rendererRect.top + scaled.y };
+		const Point target = _ToDesktop({ _rendererRect.left + scaled.x, _rendererRect.top + scaled.y });
 
 		// It has to be on a monitor. Next to a fullscreen picture that is
 		// one of the other monitors; next to a window any monitor will do.
@@ -1433,10 +1480,12 @@ void ScalingSession::_SetPointerSlowed(bool slowed, const Rect& destRect) noexce
 
 	// On the virtual output the pointer moves in pixels of the source, which
 	// the picture shows enlarged. Slowed by that factor it moves over the
-	// picture as fast as over the rest of the desktop.
+	// picture as fast as over the rest of the desktop. The desktop counts in
+	// its units, of which the picture has fewer than pixels on a monitor
+	// with a scale factor.
 	const Rect& srcRect = _frameSource->SrcRect();
 	const double scale = ((double)destRect.Width() / srcRect.Width() +
-		(double)destRect.Height() / srcRect.Height()) / 2;
+		(double)destRect.Height() / srcRect.Height()) / 2 / _pictureScale;
 
 	std::vector<PointerDevice> devices = _pointerDevices;
 	for (PointerDevice& device : devices) {
@@ -1983,10 +2032,9 @@ Rect ScalingSession::DestinationRect() const noexcept {
 		return {};
 	}
 	const Rect destRect = _DestRect();
-	return {
-		_rendererRect.left + destRect.left, _rendererRect.top + destRect.top,
-		_rendererRect.left + destRect.right, _rendererRect.top + destRect.bottom
-	};
+	const Point topLeft = _ToDesktop({ _rendererRect.left + destRect.left, _rendererRect.top + destRect.top });
+	const Point bottomRight = _ToDesktop({ _rendererRect.left + destRect.right, _rendererRect.top + destRect.bottom });
+	return { topLeft.x, topLeft.y, bottomRight.x, bottomRight.y };
 }
 
 std::string ScalingSession::Describe() const noexcept {

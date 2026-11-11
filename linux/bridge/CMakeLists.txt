@@ -10,6 +10,7 @@ pkg_check_modules(LIBSYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 find_package(PlasmaWaylandProtocols REQUIRED)
 # The virtual pointer of the wlroots compositors
 pkg_get_variable(WLR_PROTOCOLS_DIR wlr-protocols pkgdatadir)
+pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
 
 set(GENERATED)
 foreach(xml IN ITEMS
@@ -17,6 +18,9 @@ foreach(xml IN ITEMS
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/plasma-window-management.xml
 	${PLASMA_WAYLAND_PROTOCOLS_DIR}/zkde-screencast-unstable-v1.xml
 	${WLR_PROTOCOLS_DIR}/unstable/wlr-virtual-pointer-unstable-v1.xml
+	# The place and size of an output in desktop coordinates, which differ
+	# from its pixels when it has a scale factor
+	${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml
 	# Not packaged; see the file
 	${CMAKE_CURRENT_SOURCE_DIR}/protocols/virtual-keyboard-unstable-v1.xml
 )

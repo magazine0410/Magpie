@@ -69,6 +69,10 @@ dbus-daemon --nofork --config-file="$T/bus.conf" > "$T/bus.log" 2>&1 &
 PIDS+=("$!")
 export DBUS_SESSION_BUS_ADDRESS=unix:path=$T/bus
 
+# A machine without a graphics card, such as a container: Sway composes in
+# software
+ls /dev/dri/renderD* > /dev/null 2>&1 || export WLR_RENDERER=${WLR_RENDERER:-pixman}
+
 echo "xwayland disable" > "$T/sway.conf"
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway -c "$T/sway.conf" > "$T/sway.log" 2>&1 &
 PIDS+=("$!")

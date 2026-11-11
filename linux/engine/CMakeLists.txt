@@ -31,6 +31,10 @@ foreach(xml IN ITEMS
 	${WAYLAND_PROTOCOLS_DIR}/unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
 	# When a frame was shown, for the latency log
 	${WAYLAND_PROTOCOLS_DIR}/stable/presentation-time/presentation-time.xml
+	# A monitor with a scale factor: which factor, and a picture with more
+	# pixels than the surface has units
+	${WAYLAND_PROTOCOLS_DIR}/staging/fractional-scale/fractional-scale-v1.xml
+	${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml
 )
 	get_filename_component(name ${xml} NAME_WE)
 	set(header ${CMAKE_CURRENT_BINARY_DIR}/${name}-client-protocol.h)

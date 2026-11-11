@@ -234,6 +234,18 @@ bool NestedCompositor::Start(const Options& options, std::string& error) noexcep
 	environment.push_back("SWAYSOCK=" + socketPath);
 	environment.push_back("WLR_BACKENDS=headless");
 	environment.push_back("WLR_LIBINPUT_NO_DEVICES=1");
+	// On a machine without a graphics card Sway does not start unless it is
+	// told to compose in software
+	if (!std::getenv("WLR_RENDERER")) {
+		bool hasRenderNode = false;
+		std::error_code ec;
+		for (const auto& entry : std::filesystem::directory_iterator("/dev/dri", ec)) {
+			hasRenderNode = hasRenderNode || entry.path().filename().string().starts_with("renderD");
+		}
+		if (!hasRenderNode) {
+			environment.push_back("WLR_RENDERER=pixman");
+		}
+	}
 	std::vector<char*> envp;
 	for (std::string& entry : environment) {
 		envp.push_back(entry.data());

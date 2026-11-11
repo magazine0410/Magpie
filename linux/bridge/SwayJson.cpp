@@ -159,6 +159,10 @@ bool SwayJson::ParseOutputs(std::string_view json, std::vector<OutputInfo>& outp
 		OutputInfo info;
 		info.name = GetString(output, "name");
 		info.rect = GetRect(output, "rect");
+		if (const auto scale = output.FindMember("scale"); scale != output.MemberEnd() &&
+			scale->value.IsNumber() && scale->value.GetDouble() > 0.0) {
+			info.scale = scale->value.GetDouble();
+		}
 		if (const Value* mode = GetObject(output, "current_mode")) {
 			info.refreshRate = (int32_t)GetInt(*mode, "refresh");
 		}

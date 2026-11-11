@@ -272,7 +272,7 @@ private:
 	struct View {
 		std::unique_ptr<ScalingSurface> surface;
 		std::unique_ptr<Swapchain> swapchain;
-		// Where the surface is, in desktop coordinates
+		// Where the surface is, in the same pixels as _rendererRect
 		Rect rect;
 	};
 
@@ -346,6 +346,12 @@ private:
 	// Where the picture is in the renderer area, relative to that area
 	Rect _DestRect() const noexcept;
 
+	// Between the pixels of the picture, in which _rendererRect and the
+	// views are, and desktop coordinates, in which the desktop counts. They
+	// are the same unless the monitor has a scale factor.
+	Point _ToDesktop(Point picture) const noexcept;
+	Point _ToPicture(Point desktop) const noexcept;
+
 	void _WriteStateFile() const noexcept;
 
 	// Writes the answers of the desktop about shown frames to the latency log
@@ -394,9 +400,12 @@ private:
 	std::unique_ptr<CaptureSession> _capture;
 	std::unique_ptr<FrameSource> _frameSource;
 	std::vector<View> _views;
-	// The area the picture is laid out in, in desktop coordinates: what the
-	// monitors cover together, or the content of the window
+	// The area the picture is laid out in: what the monitors cover together,
+	// or the content of the window. In pixels of the picture, which are
+	// desktop coordinates times the scale factor of the monitor.
 	Rect _rendererRect;
+	// The scale factor of the monitors that show the picture
+	double _pictureScale = 1.0;
 	std::unique_ptr<EffectChain> _chain;
 	std::unique_ptr<CursorDrawer> _cursorDrawer;
 	// Toolbar and profiler; null in 3D game mode, which has neither

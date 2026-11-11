@@ -145,6 +145,7 @@ bool OverlayDrawer::Initialize(
 ) noexcept {
 	_device = &device;
 	_config = config;
+	_dpiScale = config.dpiScale > 0.0f ? config.dpiScale : 1.0f;
 	_overlayOptions = &overlayOptions;
 	_targetFormat = targetFormat;
 

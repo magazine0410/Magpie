@@ -13,6 +13,12 @@
 //
 // It only creates the surface and reports the pointer and the keyboard on
 // it; a Vulkan swap chain provides the content.
+//
+// Sizes and positions are in pixels of the picture. On a monitor with a
+// scale factor these are more than the units the desktop counts in (a
+// 3840x2160 monitor at 200 % is 1920x1080 units), and the surface says so
+// to the desktop (the protocols fractional-scale and viewporter), which
+// then shows the picture pixel for pixel. Scale gives the factor.
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -120,8 +126,11 @@ public:
 	// name. With `aboveEverything` the surface is on the overlay layer, above
 	// notifications and panels as well; otherwise on the top layer.
 	// `displayName` is the name of the compositor's socket, or empty for the
-	// compositor of the session.
-	bool CreateLayer(const std::string& displayName, const std::string& outputName, bool aboveEverything) noexcept;
+	// compositor of the session. `expectedScale` is the scale factor of the
+	// output if the caller knows it; the surface takes it until the
+	// compositor names one.
+	bool CreateLayer(const std::string& displayName, const std::string& outputName, bool aboveEverything,
+		double expectedScale = 1.0) noexcept;
 
 	// Opens a Wayland connection of its own and prepares a window whose
 	// content has this size. The window appears with its first frame. The
@@ -138,7 +147,8 @@ public:
 		Size minSize,
 		SizeRule sizeRule,
 		bool startsFixed = false,
-		bool isFullscreen = false
+		bool isFullscreen = false,
+		double expectedScale = 1.0
 	) noexcept;
 
 	// From now on the user can resize the window, down to its minimum size
@@ -166,6 +176,10 @@ public:
 	// The size of the content: that of the output for a layer surface, and
 	// what the window has been given or the size rule has chosen
 	Size GetSize() const noexcept;
+
+	// How many pixels of the picture one unit of desktop coordinates is, on
+	// the output the surface is on: 1 unless the output has a scale factor
+	double Scale() const noexcept;
 
 	// The compositor has removed the surface, for example with its output,
 	// or the user has closed the window

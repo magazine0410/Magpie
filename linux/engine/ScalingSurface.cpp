@@ -1,6 +1,7 @@
 #include "ScalingSurface.h"
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <linux/input-event-codes.h>
@@ -13,7 +14,9 @@
 #include "Logger.h"
 #include "idle-inhibit-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
+#include "fractional-scale-v1-client-protocol.h"
 #include "presentation-time-client-protocol.h"
+#include "viewporter-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
@@ -74,9 +77,24 @@ struct ScalingSurface::State {
 	xdg_surface* xdgSurface = nullptr;
 	xdg_toplevel* toplevel = nullptr;
 
+	// The size of the content in units of desktop coordinates, which is
+	// what the desktop's protocols speak in, and in pixels, which is what
+	// the callers get. They differ on an output with a scale factor.
 	Size size;
-	// How small the user may make a window, and whether it still says
-	// that it cannot be resized at all
+	Size pixelSize;
+	// The scale factor of the output in 120ths, as the protocol counts
+	uint32_t scale120 = 120;
+	// The caller named the scale factor; what the compositor said before
+	// the surface was on an output; and whether it is on one by now
+	bool isScaleExpected = false;
+	uint32_t earlyScale120 = 0;
+	bool hasEnteredOutput = false;
+	wp_viewporter* viewporter = nullptr;
+	wp_viewport* viewport = nullptr;
+	wp_fractional_scale_manager_v1* fractionalScaleManager = nullptr;
+	wp_fractional_scale_v1* fractionalScale = nullptr;
+	// How small the user may make a window, in pixels, and whether it still
+	// says that it cannot be resized at all
 	Size minSize;
 	bool isFixedSizeHeld = false;
 	// What the last toplevel configure event proposed; applied when the
@@ -141,7 +159,7 @@ struct ScalingSurface::State {
 		} else if (lockedPointer) {
 			if (hint) {
 				zwp_locked_pointer_v1_set_cursor_position_hint(lockedPointer,
-					wl_fixed_from_int(hint->x), wl_fixed_from_int(hint->y));
+					wl_fixed_from_double(hint->x * 120.0 / scale120), wl_fixed_from_double(hint->y * 120.0 / scale120));
 				// A hint takes effect with the next commit of the surface
 				wl_surface_commit(surface);
 			}
@@ -197,6 +215,63 @@ struct ScalingSurface::State {
 		}
 	}
 
+	// Rounded as the protocol fractional-scale says
+	int32_t ToPixels(int32_t units) const noexcept {
+		return (int32_t)((units * (int64_t)scale120 + 60) / 120);
+	}
+
+	Size ToPixels(Size units) const noexcept {
+		return { ToPixels(units.width), ToPixels(units.height) };
+	}
+
+	int32_t ToUnits(int32_t pixels) const noexcept {
+		return (int32_t)std::lround(pixels * 120.0 / scale120);
+	}
+
+	Size ToUnits(Size pixels) const noexcept {
+		return { ToUnits(pixels.width), ToUnits(pixels.height) };
+	}
+
+	Point PointerPixels(wl_fixed_t x, wl_fixed_t y) const noexcept {
+		return {
+			(int32_t)std::floor(wl_fixed_to_double(x) * scale120 / 120.0),
+			(int32_t)std::floor(wl_fixed_to_double(y) * scale120 / 120.0)
+		};
+	}
+
+	void SetScale(uint32_t scale) noexcept {
+		if (scale == 0 || scale == scale120) {
+			return;
+		}
+		// The same units, another number of pixels
+		scale120 = scale;
+		pixelSize = ToPixels(size);
+	}
+
+	// Tells the compositor how large the picture is in its units, whatever
+	// the number of pixels. Takes effect with the next frame.
+	void ApplyViewport() noexcept {
+		if (viewport && size.width > 0 && size.height > 0) {
+			wp_viewport_set_destination(viewport, size.width, size.height);
+		}
+	}
+
+	// For a new surface: the objects through which it learns the scale
+	// factor and can have more pixels than units. Without the second the
+	// factor stays 1.
+	void AddScaleObjects(double expectedScale) noexcept {
+		if (!viewporter) {
+			return;
+		}
+		viewport = wp_viewporter_get_viewport(viewporter, surface);
+		scale120 = (uint32_t)std::clamp(std::lround(expectedScale * 120.0), 60l, 1200l);
+		isScaleExpected = scale120 != 120;
+		if (fractionalScaleManager) {
+			fractionalScale = wp_fractional_scale_manager_v1_get_fractional_scale(fractionalScaleManager, surface);
+			wp_fractional_scale_v1_add_listener(fractionalScale, &FRACTIONAL_SCALE_LISTENER, this);
+		}
+	}
+
 	void SetOpaqueRegion() noexcept {
 		// Nothing shows through; the compositor need not draw what is below
 		wl_region* region = wl_compositor_create_region(compositor);
@@ -240,9 +315,26 @@ struct ScalingSurface::State {
 			Logger::Get().Error("The compositor did not accept the surface for the scaled picture");
 			return false;
 		}
+		// The scale factor, if the compositor names it this early
+		wl_display_roundtrip(display);
 		SetOpaqueRegion();
+		ApplyViewport();
 		return true;
 	}
+
+	static constexpr wp_fractional_scale_v1_listener FRACTIONAL_SCALE_LISTENER{
+		.preferred_scale = [](void* data, wp_fractional_scale_v1*, uint32_t scale) {
+			State& state = *(State*)data;
+			if (!state.hasEnteredOutput) {
+				// A window that is not shown yet is on no output, and Sway
+				// names the factor 1 for it whatever its monitor will be
+				state.earlyScale120 = scale;
+				return;
+			}
+			state.SetScale(scale);
+		}
+	};
+
 
 	static constexpr wl_output_listener OUTPUT_LISTENER{
 		.geometry = [](void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t,
@@ -260,7 +352,18 @@ struct ScalingSurface::State {
 	};
 
 	static constexpr wl_surface_listener SURFACE_LISTENER{
-		.enter = [](void* data, wl_surface*, wl_output* output) { ((State*)data)->currentOutput = output; },
+		.enter = [](void* data, wl_surface*, wl_output* output) {
+			State& state = *(State*)data;
+			state.currentOutput = output;
+			if (!state.hasEnteredOutput) {
+				state.hasEnteredOutput = true;
+				// What the compositor said before is taken if the caller did
+				// not know better
+				if (!state.isScaleExpected) {
+					state.SetScale(state.earlyScale120);
+				}
+			}
+		},
 		.leave = [](void* data, wl_surface*, wl_output* output) {
 			State& state = *(State*)data;
 			if (state.currentOutput == output) {
@@ -329,7 +432,7 @@ struct ScalingSurface::State {
 		.enter = [](void* data, wl_pointer*, uint32_t serial, wl_surface*, wl_fixed_t x, wl_fixed_t y) {
 			State& state = *(State*)data;
 			state.isPointerInside = true;
-			state.pointerPos = { wl_fixed_to_int(x), wl_fixed_to_int(y) };
+			state.pointerPos = state.PointerPixels(x, y);
 			++state.pointerMotionCount;
 			state.pointerEvents.push_back({ PointerEvent::Type::Motion, state.pointerPos });
 			state.pointerEnterSerial = serial;
@@ -342,7 +445,7 @@ struct ScalingSurface::State {
 		},
 		.motion = [](void* data, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y) {
 			State& state = *(State*)data;
-			state.pointerPos = { wl_fixed_to_int(x), wl_fixed_to_int(y) };
+			state.pointerPos = state.PointerPixels(x, y);
 			++state.pointerMotionCount;
 			state.pointerEvents.push_back({ PointerEvent::Type::Motion, state.pointerPos });
 		},
@@ -419,20 +522,25 @@ struct ScalingSurface::State {
 			if (proposed.width > 0 && proposed.height > 0) {
 				state.isSizeFixed = state.isProposedSizeFixed;
 
+				// The rule decides in pixels; the desktop is answered in its units
 				Size newSize = proposed;
+				Size newPixels = state.ToPixels(proposed);
 				if (!state.isSizeFixed && state.sizeRule) {
 					if (state.isResizing) {
 						state.isWidthResized = state.isWidthResized || proposed.width != state.resizeStartSize.width;
 						state.isHeightResized = state.isHeightResized || proposed.height != state.resizeStartSize.height;
-						newSize = state.sizeRule(proposed, state.isWidthResized, state.isHeightResized);
+						newPixels = state.sizeRule(newPixels, state.isWidthResized, state.isHeightResized);
 					} else {
-						newSize = state.sizeRule(proposed,
+						newPixels = state.sizeRule(newPixels,
 							proposed.width != state.size.width, proposed.height != state.size.height);
 					}
+					newSize = state.ToUnits(newPixels);
 				}
+				state.pixelSize = newPixels;
 				if (newSize != state.size) {
 					state.size = newSize;
 					state.SetOpaqueRegion();
+					state.ApplyViewport();
 				}
 			}
 			xdg_surface_ack_configure(xdgSurface, serial);
@@ -507,6 +615,11 @@ struct ScalingSurface::State {
 			} else if (std::strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0) {
 				state.relativePointerManager = (zwp_relative_pointer_manager_v1*)wl_registry_bind(
 					registry, name, &zwp_relative_pointer_manager_v1_interface, 1);
+			} else if (std::strcmp(interface, wp_viewporter_interface.name) == 0) {
+				state.viewporter = (wp_viewporter*)wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
+			} else if (std::strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+				state.fractionalScaleManager = (wp_fractional_scale_manager_v1*)wl_registry_bind(
+					registry, name, &wp_fractional_scale_manager_v1_interface, 1);
 			} else if (std::strcmp(interface, wp_presentation_interface.name) == 0) {
 				state.presentation = (wp_presentation*)wl_registry_bind(registry, name, &wp_presentation_interface, 1);
 				wp_presentation_add_listener(state.presentation, &PRESENTATION_LISTENER, &state);
@@ -525,6 +638,8 @@ struct ScalingSurface::State {
 			State& state = *(State*)data;
 			zwlr_layer_surface_v1_ack_configure(layerSurface, serial);
 			state.size = { (int32_t)width, (int32_t)height };
+			state.pixelSize = state.ToPixels(state.size);
+			state.ApplyViewport();
 			state.isConfigured = true;
 		},
 		.closed = [](void* data, zwlr_layer_surface_v1*) {
@@ -554,7 +669,8 @@ Size ScalingSurface::LargestOutputSize() const noexcept {
 bool ScalingSurface::CreateLayer(
 	const std::string& displayName,
 	const std::string& outputName,
-	bool aboveEverything
+	bool aboveEverything,
+	double expectedScale
 ) noexcept {
 	State& state = *_state;
 	if (!state.Connect(displayName)) {
@@ -578,6 +694,7 @@ bool ScalingSurface::CreateLayer(
 
 	state.surface = wl_compositor_create_surface(state.compositor);
 	wl_surface_add_listener(state.surface, &State::SURFACE_LISTENER, &state);
+	state.AddScaleObjects(expectedScale);
 	state.layerSurface = zwlr_layer_shell_v1_get_layer_surface(state.layerShell, state.surface, output,
 		aboveEverything ? ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY : ZWLR_LAYER_SHELL_V1_LAYER_TOP, "magpie-scaling");
 	zwlr_layer_surface_v1_add_listener(state.layerSurface, &State::LAYER_SURFACE_LISTENER, &state);
@@ -602,7 +719,8 @@ bool ScalingSurface::CreateWindow(
 	Size minSize,
 	SizeRule sizeRule,
 	bool startsFixed,
-	bool isFullscreen
+	bool isFullscreen,
+	double expectedScale
 ) noexcept {
 	State& state = *_state;
 	if (!state.Connect(displayName)) {
@@ -613,11 +731,13 @@ bool ScalingSurface::CreateWindow(
 		return false;
 	}
 
-	state.size = size;
 	state.sizeRule = std::move(sizeRule);
 
 	state.surface = wl_compositor_create_surface(state.compositor);
 	wl_surface_add_listener(state.surface, &State::SURFACE_LISTENER, &state);
+	state.AddScaleObjects(expectedScale);
+	state.pixelSize = size;
+	state.size = state.ToUnits(size);
 	state.xdgSurface = xdg_wm_base_get_xdg_surface(state.wmBase, state.surface);
 	xdg_surface_add_listener(state.xdgSurface, &State::XDG_SURFACE_LISTENER, &state);
 	state.toplevel = xdg_surface_get_toplevel(state.xdgSurface);
@@ -626,11 +746,11 @@ bool ScalingSurface::CreateWindow(
 	xdg_toplevel_set_app_id(state.toplevel, appId.c_str());
 	state.minSize = minSize;
 	if (startsFixed) {
-		xdg_toplevel_set_min_size(state.toplevel, size.width, size.height);
-		xdg_toplevel_set_max_size(state.toplevel, size.width, size.height);
+		xdg_toplevel_set_min_size(state.toplevel, state.size.width, state.size.height);
+		xdg_toplevel_set_max_size(state.toplevel, state.size.width, state.size.height);
 		state.isFixedSizeHeld = true;
 	} else {
-		xdg_toplevel_set_min_size(state.toplevel, minSize.width, minSize.height);
+		xdg_toplevel_set_min_size(state.toplevel, state.ToUnits(minSize.width), state.ToUnits(minSize.height));
 	}
 
 	if (isFullscreen) {
@@ -659,7 +779,7 @@ void ScalingSurface::ReleaseFixedSize() noexcept {
 	}
 	state.isFixedSizeHeld = false;
 	// Takes effect with the next frame
-	xdg_toplevel_set_min_size(state.toplevel, state.minSize.width, state.minSize.height);
+	xdg_toplevel_set_min_size(state.toplevel, state.ToUnits(state.minSize.width), state.ToUnits(state.minSize.height));
 	xdg_toplevel_set_max_size(state.toplevel, 0, 0);
 	wl_display_flush(state.display);
 }
@@ -730,7 +850,11 @@ wl_surface* ScalingSurface::Surface() const noexcept {
 }
 
 Size ScalingSurface::GetSize() const noexcept {
-	return _state->size;
+	return _state->pixelSize;
+}
+
+double ScalingSurface::Scale() const noexcept {
+	return _state->scale120 / 120.0;
 }
 
 bool ScalingSurface::IsClosed() const noexcept {
