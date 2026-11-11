@@ -1749,8 +1749,12 @@ TEST_CASE("A program is scaled in a nested session", "[sway][desktop][session][n
 
 		session.Stop();
 		nested.Stop();
-		CHECK(kill(pid, 0) == -1);
-		CHECK(errno == ESRCH);
+		// Ended: gone, or waiting to be collected where nothing collects
+		// orphans (a container whose first process does not)
+		std::string stat;
+		std::getline(std::ifstream(fmt::format("/proc/{}/stat", pid)), stat);
+		INFO(stat);
+		CHECK((stat.empty() || stat.find(") Z ") != std::string::npos));
 		CHECK_FALSE(nested.IsRunning());
 		std::error_code ec;
 		std::filesystem::remove(pidFile, ec);

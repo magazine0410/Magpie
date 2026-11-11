@@ -50,7 +50,10 @@ struct ProcessRef {
 	unsigned long long startTime = 0;
 };
 
-// The parent and the start time of a process, from /proc/PID/stat
+// The parent and the start time of a process, from /proc/PID/stat. A process
+// that has ended and waits for its parent to take note of it (a zombie) counts
+// as gone: where nothing collects orphans, as in a container whose first
+// process does not, it would stay listed for good.
 bool ReadProcess(pid_t pid, pid_t& parent, unsigned long long& startTime) noexcept {
 	std::ifstream file(fmt::format("/proc/{}/stat", pid));
 	std::string text;
@@ -64,7 +67,9 @@ bool ReadProcess(pid_t pid, pid_t& parent, unsigned long long& startTime) noexce
 	std::istringstream fields(text.substr(end + 1));
 	std::string field;
 	for (int i = 0; i < 20 && (fields >> field); ++i) {
-		if (i == 1) {
+		if (i == 0 && field == "Z") {
+			return false;
+		} else if (i == 1) {
 			parent = (pid_t)std::atoi(field.c_str());
 		} else if (i == 19) {
 			startTime = std::strtoull(field.c_str(), nullptr, 10);
