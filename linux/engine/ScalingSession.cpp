@@ -1532,6 +1532,11 @@ bool ScalingSession::_TrackNested() noexcept {
 		}
 	}
 	_windowId = main->info.id;
+	// The picture's window has the title of the program's
+	if (main->info.title != _original.title && !main->info.title.empty()) {
+		_original.title = main->info.title;
+		surface.SetTitle(main->info.title);
+	}
 
 	// A single window of a fixed size floats in the middle of the output.
 	// The output takes its size, so that the window is the whole picture; a

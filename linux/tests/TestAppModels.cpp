@@ -310,10 +310,13 @@ TEST_CASE("What a profile starts is its launcher or the program of its rule", "[
 	CHECK(ProfileActions::ProgramToLaunch(profile) == "/usr/bin/true");
 	profile.launchParameters = "--some \"quoted argument\"";
 	CHECK(ProfileActions::Launch(profile));
+	// The same as a list, for a start in a nested session
+	CHECK(ProfileActions::LaunchCommand(profile) == QStringList{ "/usr/bin/true", "--some", "quoted argument" });
 
 	// A launcher that is gone
 	profile.launcherPath = "/no/such/launcher";
 	CHECK(ProfileActions::ProgramToLaunch(profile).isEmpty());
+	CHECK(ProfileActions::LaunchCommand(profile).isEmpty());
 
 	// An app ID without a .desktop file gets the general icon
 	CHECK(ProfileActions::IconName("no.such.application") == "application-x-executable");

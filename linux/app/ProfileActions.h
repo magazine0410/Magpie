@@ -2,6 +2,7 @@
 // actions of the Profile class of src/Magpie (Launch, OpenProgramLocation).
 #pragma once
 #include <QString>
+#include <QStringList>
 #include "Profile.h"
 
 namespace Magpie {
@@ -15,6 +16,10 @@ struct ProfileActions {
 
 	// Starts the program with the launch parameters of the profile
 	static bool Launch(const Profile& profile);
+
+	// The program and its arguments as Launch starts them; empty if there
+	// is no program to start
+	static QStringList LaunchCommand(const Profile& profile);
 
 	// The directory of the program of the rule; empty if it is no file on
 	// this system

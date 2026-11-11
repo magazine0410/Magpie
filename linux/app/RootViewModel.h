@@ -30,6 +30,11 @@ public:
 	Q_INVOKABLE void removeProfile(int profile);
 	Q_INVOKABLE void moveProfile(int profile, bool up);
 	Q_INVOKABLE void launch(int profile);
+
+	// Starts the program of a profile: in a nested session if the profile
+	// says so or the desktop has no back end, otherwise as it is, to be
+	// scaled like any window
+	static void Launch(const Profile& profile, ScalingController& scaling);
 	Q_INVOKABLE void openProgramLocation(int profile);
 	Q_INVOKABLE bool canOpenProgramLocation(int profile) const;
 

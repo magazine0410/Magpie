@@ -440,6 +440,20 @@ static void WriteProfile(JsonWriter& writer, const Profile& profile) noexcept {
 		writer.Uint((uint32_t)profile.autoScale);
 		writer.Key("launchParameters");
 		writer.String(profile.launchParameters.c_str());
+		// Only the Linux version has and reads these three. They are left
+		// out while they have their defaults, so that a configuration from
+		// Windows is written back as it was.
+		const Profile defaults;
+		if (profile.isLaunchedNested) {
+			writer.Key("launchNested");
+			writer.Bool(true);
+		}
+		if (profile.nestedWidth != defaults.nestedWidth || profile.nestedHeight != defaults.nestedHeight) {
+			writer.Key("nestedWidth");
+			writer.Uint(profile.nestedWidth);
+			writer.Key("nestedHeight");
+			writer.Uint(profile.nestedHeight);
+		}
 	}
 
 	writer.Key("scalingMode");
@@ -551,6 +565,15 @@ static bool ReadProfile(
 		}
 
 		ReadPath(profileObj, "launcherPath", profile.launcherPath);
+
+		ReadBool(profileObj, "launchNested", profile.isLaunchedNested);
+		ReadUInt(profileObj, "nestedWidth", profile.nestedWidth);
+		ReadUInt(profileObj, "nestedHeight", profile.nestedHeight);
+		if (profile.nestedWidth < 64 || profile.nestedWidth > 16384 ||
+			profile.nestedHeight < 64 || profile.nestedHeight > 16384) {
+			profile.nestedWidth = 1280;
+			profile.nestedHeight = 720;
+		}
 
 		// Old versions stored the launcher relative to the program. This only
 		// has an effect for native paths: a Windows path contains no separator

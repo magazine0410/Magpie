@@ -127,6 +127,9 @@ public:
 	// From now on the user can resize the window, down to its minimum size
 	void ReleaseFixedSize() noexcept;
 
+	// Gives a window another title
+	void SetTitle(const std::string& title) noexcept;
+
 	// Processes the events that have arrived without waiting for more.
 	// Returns false when the connection is lost.
 	bool PumpEvents() noexcept;

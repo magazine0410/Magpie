@@ -81,8 +81,31 @@ struct TestWindow {
 		return item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint();
 	}
 
+	// Scrolls the page so that the item is in the window
+	void ScrollIntoView(QQuickItem* item) {
+		for (QQuickItem* parent = item ? item->parentItem() : nullptr; parent; parent = parent->parentItem()) {
+			if (!parent->inherits("QQuickFlickable")) {
+				continue;
+			}
+			QQuickItem* content = parent->property("contentItem").value<QQuickItem*>();
+			if (!content) {
+				return;
+			}
+			const qreal top = item->mapToItem(content, QPointF(0, 0)).y();
+			const qreal shown = parent->property("contentY").toReal();
+			if (top < shown || top + item->height() > shown + parent->height()) {
+				const qreal last = std::max(parent->property("contentHeight").toReal() - parent->height(), 0.0);
+				parent->setProperty("contentY", std::clamp(top - parent->height() / 2, 0.0, last));
+				QTest::qWait(50);
+			}
+			return;
+		}
+	}
+
 	void Click(const QString& objectName) {
-		QTest::mouseClick(window, Qt::LeftButton, {}, Center(Find(objectName)));
+		QQuickItem* item = Find(objectName);
+		ScrollIntoView(item);
+		QTest::mouseClick(window, Qt::LeftButton, {}, Center(item));
 		QTest::qWait(150);
 	}
 
@@ -259,6 +282,32 @@ TEST_CASE("Profiles are made, shown, changed, moved and deleted", "[app]") {
 		test.PressKey(Qt::Key_Return);
 		CHECK(test.Data().profiles[0].maxFrameRate == 1000.0f);
 		CHECK(test.Find("profileMaxFrameRate")->property("text").toString() == "1000");
+	}
+
+	SECTION("the size of a nested session has limits") {
+		// Without a scaling service there is no back end for the desktop,
+		// so the page says that the program is started in a nested session
+		// in any case, and shows the size
+		QQuickItem* nestedSwitch = test.Find("profileLaunchNested");
+		REQUIRE(nestedSwitch);
+		CHECK(nestedSwitch->property("checked").toBool());
+		CHECK_FALSE(nestedSwitch->property("enabled").toBool());
+		CHECK_FALSE(test.Data().profiles[0].isLaunchedNested);
+
+		CHECK(test.Find("profileNestedWidth")->property("text").toString() == "1280");
+		test.Click("profileNestedWidth");
+		test.PressKey(Qt::Key_A, Qt::ControlModifier);
+		test.Type("800");
+		test.PressKey(Qt::Key_Return);
+		CHECK(test.Data().profiles[0].nestedWidth == 800);
+
+		test.Click("profileNestedHeight");
+		test.PressKey(Qt::Key_A, Qt::ControlModifier);
+		test.Type("99999");
+		test.PressKey(Qt::Key_Return);
+		CHECK(test.Data().profiles[0].nestedHeight == 16384);
+		CHECK(test.Find("profileNestedHeight")->property("text").toString() == "16384");
+		SavePicture(test.window, "profile-nested");
 	}
 
 	SECTION("a profile is copied from another one, renamed, moved and deleted") {

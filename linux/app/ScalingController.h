@@ -79,6 +79,15 @@ public:
 	// Opens the desktop's dialog for the keys
 	void ConfigureShortcuts();
 
+	// Windows that are open already can be scaled: the desktop has a back
+	// end. Without one only programs started in a nested session can.
+	bool HasDesktopBackEnd() const noexcept {
+		return _service.HasDesktopBackEnd();
+	}
+
+	// Starts a program in a nested session and scales it
+	void LaunchNested(ScalingService::LaunchRequest request);
+
 	// Looks at the active window again for auto-scale, after a change of
 	// the profiles
 	void CheckForeground();

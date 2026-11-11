@@ -35,4 +35,25 @@
   <data name="Linux_Home_Toolbar.Description" xml:space="preserve">
     <value>The toolbar appears at the top of the scaled picture, providing features like FPS display and screenshot capture.</value>
   </data>
+  <data name="Linux_NoBackEnd.Title" xml:space="preserve">
+    <value>Windows that are already open cannot be scaled on this desktop</value>
+  </data>
+  <data name="Linux_NoBackEnd.Message" xml:space="preserve">
+    <value>Magpie has no way to capture and control the windows of this desktop. A program can still be scaled if Magpie starts it: create a profile for it and use the Launch button, which starts the program in a nested session.</value>
+  </data>
+  <data name="Linux_Profile_LaunchNested.Header" xml:space="preserve">
+    <value>Launch in a nested session</value>
+  </data>
+  <data name="Linux_Profile_LaunchNested.Description" xml:space="preserve">
+    <value>The Launch button starts the program inside a compositor of Magpie's own and scales it from there. The program sees a screen of the size below. Needs Sway to be installed.</value>
+  </data>
+  <data name="Linux_Profile_LaunchNested.OnlyWay" xml:space="preserve">
+    <value>The Launch button starts the program inside a compositor of Magpie's own and scales it from there. On this desktop that is the only way to scale. Needs Sway to be installed.</value>
+  </data>
+  <data name="Linux_Profile_NestedSize.Header" xml:space="preserve">
+    <value>Size of the nested session</value>
+  </data>
+  <data name="Linux_Profile_NestedSize.Description" xml:space="preserve">
+    <value>The screen size the program is offered, in pixels, which is the size the picture is scaled from. A window that cannot be resized is scaled at its own size.</value>
+  </data>
 </root>

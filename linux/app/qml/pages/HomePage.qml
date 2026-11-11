@@ -18,6 +18,13 @@ PageFrame {
         message: page.vm.engineError
     }
 
+    InfoBar {
+        visible: page.vm.isEngineAvailable && !page.vm.hasDesktopBackEnd
+        severity: InfoBar.Severity.Warning
+        title: qsTrId("Linux_NoBackEnd.Title")
+        message: qsTrId("Linux_NoBackEnd.Message")
+    }
+
     SettingsGroup {
         header: qsTrId("Home_Activation.Header")
         description: qsTrId("Home_Activation.Description")

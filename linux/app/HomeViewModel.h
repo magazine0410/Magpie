@@ -22,6 +22,8 @@ class HomeViewModel : public QObject {
 	Q_PROPERTY(QString screenshotShortcut READ ScreenshotShortcut NOTIFY Changed)
 	Q_PROPERTY(bool hasShortcuts READ HasShortcuts NOTIFY Changed)
 	Q_PROPERTY(bool canConfigureShortcuts READ CanConfigureShortcuts NOTIFY Changed)
+	// Windows that are open already can be scaled on this desktop
+	Q_PROPERTY(bool hasDesktopBackEnd READ HasDesktopBackEnd NOTIFY Changed)
 
 	Q_PROPERTY(QString timerDescription READ TimerDescription NOTIFY Changed)
 	Q_PROPERTY(bool isTimerOn READ IsTimerOn NOTIFY Changed)
@@ -65,6 +67,7 @@ public:
 	QString ScreenshotShortcut() const;
 	bool HasShortcuts() const;
 	bool CanConfigureShortcuts() const;
+	bool HasDesktopBackEnd() const;
 	Q_INVOKABLE void configureShortcuts();
 
 	QString TimerDescription() const;

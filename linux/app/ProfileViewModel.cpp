@@ -8,6 +8,7 @@
 #include "Application.h"
 #include "Paths.h"
 #include "ProfileActions.h"
+#include "RootViewModel.h"
 #include "ScalingController.h"
 #include "ScreenshotFilenameTemplateHelper.h"
 
@@ -42,7 +43,38 @@ bool ProfileViewModel::CanLaunch() const {
 
 void ProfileViewModel::launch() {
 	if (CanLaunch()) {
-		ProfileActions::Launch(_data());
+		RootViewModel::Launch(_data(), _application.Scaling());
+	}
+}
+
+bool ProfileViewModel::IsNestedOnly() const {
+	return !_application.Scaling().HasDesktopBackEnd();
+}
+
+// What a nested session can offer a program: from the smallest source that
+// can be scaled to the largest output
+static uint32_t ClampNestedSize(double value) {
+	return (uint32_t)std::clamp(std::lround(value), 64l, 16384l);
+}
+
+void ProfileViewModel::SetNestedWidth(double value) {
+	const uint32_t width = ClampNestedSize(value);
+	if (_data().nestedWidth != width) {
+		_data().nestedWidth = width;
+		_Save();
+	} else {
+		// The field shows what was typed; back to what is in effect
+		Q_EMIT Changed();
+	}
+}
+
+void ProfileViewModel::SetNestedHeight(double value) {
+	const uint32_t height = ClampNestedSize(value);
+	if (_data().nestedHeight != height) {
+		_data().nestedHeight = height;
+		_Save();
+	} else {
+		Q_EMIT Changed();
 	}
 }
 

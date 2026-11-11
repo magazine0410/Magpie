@@ -3,6 +3,12 @@
 // and answers on D-Bus. Linux counterpart of ScalingService (src/Magpie) and
 // ScalingRuntime (src/Magpie.Core).
 //
+// Besides windows that are open already, it scales a program that it starts
+// itself in a nested session (a compositor of Magpie's own, see
+// NestedCompositor). That works on every desktop; scaling open windows needs
+// a back end for the desktop, and where there is none the service runs for
+// nested sessions alone.
+//
 // One thread does everything: the one that calls Initialize and Run. While a
 // window is scaled it runs the scaling session, which wakes for D-Bus and
 // for commands as well. The functions marked as callable from any thread
@@ -19,6 +25,7 @@
 #include <utility>
 #include <vector>
 #include "Bridge.h"
+#include "NestedCompositor.h"
 #include "PortalShortcuts.h"
 #include "ScalingSession.h"
 #include "Settings.h"
@@ -49,6 +56,21 @@ public:
 	};
 
 	using BoundShortcuts = std::vector<std::pair<std::string, std::string>>;
+
+	// A program to start in a nested session
+	struct LaunchRequest {
+		// The program and its arguments
+		std::vector<std::string> command;
+		// Empty: that of the service
+		std::filesystem::path workingDirectory;
+		// The profile whose settings apply; empty or unknown: the defaults
+		std::string profileName;
+		// Into a window; otherwise the picture covers a monitor
+		bool windowedMode = false;
+		// What the session offers the program, which is the size the
+		// picture is scaled from; zero: that of the profile
+		Size size{};
+	};
 
 	// The ids of the shortcuts
 	static constexpr const char* SHORTCUT_SCALE = "scale";
@@ -133,6 +155,17 @@ public:
 		return _canConfigureShortcuts;
 	}
 
+	// Whether windows that are open already can be scaled: there is a back
+	// end for this desktop. Valid after Initialize.
+	bool HasDesktopBackEnd() const noexcept {
+		return _hasDesktopBackEnd;
+	}
+
+	// Starts a program in a nested session and scales it. Ends the scaling
+	// of a window; does nothing but tell the user if a nested session runs
+	// already.
+	void LaunchNested(LaunchRequest request) noexcept;
+
 	// The windows that can be scaled, without the program's own. `reply` is
 	// called on the service's thread.
 	void ListWindows(std::function<void(std::vector<Window> windows)> reply) noexcept;
@@ -151,6 +184,12 @@ private:
 	Window _Identify(const WindowInfo& info) const noexcept;
 	bool _IsOwnOrForbidden(const WindowInfo& info) const noexcept;
 
+	void _LaunchNested(const LaunchRequest& request) noexcept;
+	bool _StartNestedSession(bool windowedMode) noexcept;
+	void _EndNested() noexcept;
+	// Tells the user, and the log, why something did not happen
+	void _Report(const std::string& message) noexcept;
+
 	bool _StartScaling(const std::string& windowId, bool windowedMode) noexcept;
 	void _EndSession() noexcept;
 	void _StopScaling(bool byUser) noexcept;
@@ -161,7 +200,13 @@ private:
 	void _CheckForeground() noexcept;
 
 	Config _config;
+	// Null on a desktop without a back end
 	std::unique_ptr<DesktopBridge> _bridge;
+	std::atomic<bool> _hasDesktopBackEnd = false;
+	// The compositor of the nested session, while one runs; _session then
+	// scales its output
+	std::unique_ptr<NestedCompositor> _nested;
+	std::string _nestedProfileName;
 	sd_bus* _bus = nullptr;
 	// The shortcuts come from the portal, or from the back end of a desktop
 	// whose portal has none; then _bridgeShortcuts has what was bound

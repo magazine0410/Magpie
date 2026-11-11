@@ -615,6 +615,13 @@ void ScalingSurface::ReleaseFixedSize() noexcept {
 	wl_display_flush(state.display);
 }
 
+void ScalingSurface::SetTitle(const std::string& title) noexcept {
+	if (_state->toplevel) {
+		xdg_toplevel_set_title(_state->toplevel, title.c_str());
+		wl_display_flush(_state->display);
+	}
+}
+
 bool ScalingSurface::PumpEvents() noexcept {
 	wl_display* display = _state->display;
 	while (wl_display_prepare_read(display) != 0) {

@@ -668,6 +668,50 @@ PageFrame {
             }
         }
 
+        SettingsExpander {
+            visible: !page.vm.isDefaultProfile
+            header: qsTrId("Linux_Profile_LaunchNested.Header")
+            description: page.vm.isNestedOnly ? qsTrId("Linux_Profile_LaunchNested.OnlyWay")
+                : qsTrId("Linux_Profile_LaunchNested.Description")
+            expanded: page.vm.isLaunchedNested || page.vm.isNestedOnly
+
+            headerContent: Switch {
+                objectName: "profileLaunchNested"
+                // Where the desktop has no back end, this is how every
+                // program is started
+                enabled: !page.vm.isNestedOnly
+                checked: page.vm.isLaunchedNested || page.vm.isNestedOnly
+                onToggled: page.vm.isLaunchedNested = checked
+            }
+
+            ExpanderItem {
+                header: qsTrId("Linux_Profile_NestedSize.Header")
+                description: qsTrId("Linux_Profile_NestedSize.Description")
+
+                RowLayout {
+                    spacing: 8
+
+                    NumberField {
+                        objectName: "profileNestedWidth"
+                        Layout.preferredWidth: 90
+                        value: page.vm.nestedWidth
+                        onEdited: (newValue) => page.vm.nestedWidth = newValue
+                    }
+
+                    Label {
+                        text: "×"
+                    }
+
+                    NumberField {
+                        objectName: "profileNestedHeight"
+                        Layout.preferredWidth: 90
+                        value: page.vm.nestedHeight
+                        onEdited: (newValue) => page.vm.nestedHeight = newValue
+                    }
+                }
+            }
+        }
+
         SettingsCard {
             header: qsTrId("Profile_Advanced_OutputAlignment.Header")
             description: qsTrId("Profile_Advanced_OutputAlignment.Description")

@@ -119,8 +119,9 @@ wait_status() {
 	done
 	status
 }
+# ENGINE_ENV: put in front of the command, for example "env -u SWAYSOCK"
 start_engine() {
-	"$ENGINE" --effects-dir "$EFFECTS" --no-cursor-speed -v "$@" >> "$T/engine.log" 2>&1 &
+	${ENGINE_ENV:-} "$ENGINE" --effects-dir "$EFFECTS" --no-cursor-speed -v "$@" >> "$T/engine.log" 2>&1 &
 	ENGINE_PID=$!
 	PIDS+=("$ENGINE_PID")
 	wait_status idle 10 > /dev/null
@@ -242,6 +243,79 @@ check "scaled again after another window was active" "$(wait_status scaling 5)" 
 check "still running after SIGTERM" "$(stop_engine TERM)" "no"
 sleep 0.3
 check "the source has its place again" "$(window_line source | cut -d' ' -f1,3-6)" "$(echo "$BEFORE" | cut -d' ' -f1,3-6)"
+
+echo "--- a nested session ---"
+# The window of the picture, as SIZE; empty if there is none
+picture() { windows | grep " $1 " | head -1 | cut -d' ' -f5; }
+# No profile that scales the test window by itself any more, which would
+# happen whenever a nested session ends and the window is active again; and
+# a profile that says what a nested session offers its program
+python3 - "$MAGPIE_CONFIG_DIR/v5/config.json" "$(readlink -f "$WINDOW")" <<'PY'
+import json, sys
+path, program = sys.argv[1:3]
+config = json.load(open(path))
+config["profiles"] = [
+    config["profiles"][0],
+    {"name": "Nested test", "packaged": False, "pathRule": program, "classNameRule": "magpie.test",
+     "autoScale": 0, "scalingMode": 0, "adjustCursorSpeed": False,
+     "launchNested": True, "nestedWidth": 800, "nestedHeight": 600}
+]
+json.dump(config, open(path, "w"), indent=2)
+PY
+: > "$T/engine.log"
+start_engine
+"$CTL" launch --size 640x480 -- "$WINDOW" --title nested-game --resizable
+check "launch a program in a nested session" "$(wait_status scaling 10)" "scaling"
+check "what is scaled is a nested session" "$("$CTL" nested)" "yes"
+NESTED_SWAY=$(pgrep -x -P "$ENGINE_PID" sway)
+check "the service has started a Sway of its own" "$(echo "$NESTED_SWAY" | wc -w)" "1"
+for i in $(seq 1 30); do [ -n "$(picture nested-game)" ] && break; sleep 0.1; done
+check "the picture covers the monitor and has the program's title" "$(picture nested-game)" "1920x1080"
+check "the program's window is not one of the desktop" "$(windows | grep -c ' nested-game ')" "1"
+"$CTL" window
+sleep 1
+check "the windowed command shows it in a window" "$(wait_status scaling 5) $([ "$(picture nested-game)" != 1920x1080 ] && echo window)" "scaling window"
+"$CTL" scale
+sleep 1
+check "the fullscreen command shows it fullscreen again" "$(picture nested-game)" "1920x1080"
+"$CTL" scale source
+sleep 0.5
+check "a window is not scaled in its place" "$(status) $("$CTL" nested)" "scaling yes"
+"$CTL" stop
+check "stop ends it" "$(wait_status idle 5) $("$CTL" nested)" "idle no"
+sleep 0.5
+check "its Sway has ended" "$(kill -0 "$NESTED_SWAY" 2> /dev/null && echo running || echo ended)" "ended"
+check "the picture is gone" "$(picture nested-game)" ""
+
+"$CTL" launch --windowed --size 400x300 -- "$WINDOW" --title short-lived --duration 1.5
+check "a program that ends by itself" "$(wait_status scaling 10)" "scaling"
+check "the session ends a few seconds after it" "$(wait_status idle 10)" "idle"
+
+"$CTL" launch --profile "Nested test" -- "$WINDOW" --title nested-game --resizable
+check "launched with a profile" "$(wait_status scaling 10)" "scaling"
+check "the session has the size of the profile" "$(grep -c "Nested session started: 800x600" "$T/engine.log")" "1"
+NESTED_SWAY=$(pgrep -x -P "$ENGINE_PID" sway)
+check "still running after SIGTERM" "$(stop_engine TERM)" "no"
+sleep 0.5
+check "its Sway has ended with the service" "$(kill -0 "$NESTED_SWAY" 2> /dev/null && echo running || echo ended)" "ended"
+
+echo "--- a desktop without a back end ---"
+# Without the variable that names Sway's socket the service finds neither
+# Sway nor KWin
+: > "$T/engine.log"
+ENGINE_ENV="env -u SWAYSOCK" start_engine
+check "the service runs" "$(status)" "idle"
+check "it says that the desktop has no back end" "$(grep -c "has no back end" "$T/engine.log")" "1"
+"$CTL" scale source
+sleep 0.5
+check "a window cannot be scaled" "$(status)" "idle"
+"$CTL" launch --size 640x480 -- "$WINDOW" --title nested-game --resizable
+check "a program in a nested session can" "$(wait_status scaling 10)" "scaling"
+for i in $(seq 1 30); do [ -n "$(picture nested-game)" ] && break; sleep 0.1; done
+check "its picture covers the monitor" "$(picture nested-game)" "1920x1080"
+"$CTL" stop
+check "stop" "$(wait_status idle 5)" "idle"
+check "still running after SIGTERM" "$(stop_engine TERM)" "no"
 
 echo
 echo "warnings and errors of the service:"

@@ -62,6 +62,14 @@ class ProfileViewModel : public QObject {
 	Q_PROPERTY(bool isAdjustCursorSpeed READ IsAdjustCursorSpeed WRITE SetIsAdjustCursorSpeed NOTIFY Changed)
 
 	Q_PROPERTY(QString launchParameters READ LaunchParameters WRITE SetLaunchParameters NOTIFY Changed)
+	// Only on Linux: start the program in a nested session, and the size
+	// that session offers it
+	Q_PROPERTY(bool isLaunchedNested READ IsLaunchedNested WRITE SetIsLaunchedNested NOTIFY Changed)
+	Q_PROPERTY(double nestedWidth READ NestedWidth WRITE SetNestedWidth NOTIFY Changed)
+	Q_PROPERTY(double nestedHeight READ NestedHeight WRITE SetNestedHeight NOTIFY Changed)
+	// The desktop has no back end, so the program is started that way
+	// whatever the profile says
+	Q_PROPERTY(bool isNestedOnly READ IsNestedOnly CONSTANT)
 	Q_PROPERTY(int outputAlignment READ OutputAlignment WRITE SetOutputAlignment NOTIFY Changed)
 
 public:
@@ -177,6 +185,17 @@ public:
 
 	QString LaunchParameters() const;
 	void SetLaunchParameters(const QString& value);
+
+	MAGPIE_SETTING(bool, IsLaunchedNested, _data().isLaunchedNested)
+	double NestedWidth() const {
+		return _data().nestedWidth;
+	}
+	void SetNestedWidth(double value);
+	double NestedHeight() const {
+		return _data().nestedHeight;
+	}
+	void SetNestedHeight(double value);
+	bool IsNestedOnly() const;
 	MAGPIE_SETTING(int, OutputAlignment, _data().outputAlignment)
 
 Q_SIGNALS:

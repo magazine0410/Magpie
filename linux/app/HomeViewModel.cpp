@@ -51,6 +51,10 @@ bool HomeViewModel::HasShortcuts() const {
 	return _scaling.HasShortcuts();
 }
 
+bool HomeViewModel::HasDesktopBackEnd() const {
+	return _scaling.HasDesktopBackEnd();
+}
+
 bool HomeViewModel::CanConfigureShortcuts() const {
 	return _scaling.CanConfigureShortcuts();
 }

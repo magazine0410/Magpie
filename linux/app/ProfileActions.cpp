@@ -31,6 +31,14 @@ bool ProfileActions::Launch(const Profile& profile) {
 		QFileInfo(program).path());
 }
 
+QStringList ProfileActions::LaunchCommand(const Profile& profile) {
+	const QString program = ProgramToLaunch(profile);
+	if (program.isEmpty()) {
+		return {};
+	}
+	return QStringList(program) + QProcess::splitCommand(QString::fromStdString(profile.launchParameters));
+}
+
 QString ProfileActions::ProgramLocation(const Profile& profile) {
 	const QFileInfo program(QString::fromStdString(profile.pathRule));
 	return program.isAbsolute() && program.isFile() ? program.path() : QString();

@@ -139,6 +139,12 @@ void ScalingController::ConfigureShortcuts() {
 	}
 }
 
+void ScalingController::LaunchNested(ScalingService::LaunchRequest request) {
+	if (IsAvailable()) {
+		_service.LaunchNested(std::move(request));
+	}
+}
+
 void ScalingController::CheckForeground() {
 	if (_isAvailable) {
 		_service.CheckForeground();

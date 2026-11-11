@@ -51,6 +51,34 @@ struct ScalingServiceDBus {
 		return sd_bus_reply_method_return(message, "");
 	}
 
+	static int OnLaunch(sd_bus_message* message, void* userData, sd_bus_error*) {
+		ScalingService::LaunchRequest request;
+		char** command = nullptr;
+		const char* workingDirectory = nullptr;
+		const char* profileName = nullptr;
+		int windowed = 0;
+		int result = sd_bus_message_read_strv(message, &command);
+		if (result >= 0) {
+			result = sd_bus_message_read(message, "ssbii", &workingDirectory, &profileName, &windowed,
+				&request.size.width, &request.size.height);
+		}
+		if (command) {
+			for (char** argument = command; *argument; ++argument) {
+				request.command.emplace_back(*argument);
+				free(*argument);
+			}
+			free(command);
+		}
+		if (result < 0) {
+			return result;
+		}
+		request.workingDirectory = workingDirectory;
+		request.profileName = profileName;
+		request.windowedMode = windowed != 0;
+		Service(userData).LaunchNested(std::move(request));
+		return sd_bus_reply_method_return(message, "");
+	}
+
 	static int OnSwitchToolbar(sd_bus_message* message, void* userData, sd_bus_error*) {
 		ScalingService& service = Service(userData);
 		service._Post([&service] {
@@ -100,6 +128,10 @@ struct ScalingServiceDBus {
 			service._state != ScalingService::State::Idle ? service._windowId.c_str() : "");
 	}
 
+	static int GetNested(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
+		return sd_bus_message_append(reply, "b", (int)(Service(userData)._nested != nullptr));
+	}
+
 	static int GetSourceActive(sd_bus*, const char*, const char*, const char*, sd_bus_message* reply, void* userData, sd_bus_error*) {
 		const ScalingService& service = Service(userData);
 		return sd_bus_message_append(reply, "b", (int)(service._session && service._session->IsSourceActive()));
@@ -131,7 +163,13 @@ struct ScalingServiceDBus {
 		SD_BUS_METHOD("SwitchToolbar", "", "", OnSwitchToolbar, SD_BUS_VTABLE_UNPRIVILEGED),
 		// A window id, an app ID or a part of a title; and whether into a window
 		SD_BUS_METHOD("ScaleWindow", "sb", "", OnScaleWindow, SD_BUS_VTABLE_UNPRIVILEGED),
+		// Ends scaling; a nested session ends with its program
 		SD_BUS_METHOD("Stop", "", "", OnStop, SD_BUS_VTABLE_UNPRIVILEGED),
+		// Starts a program in a nested session: the program with its
+		// arguments, a working directory (or ""), the name of a profile (or
+		// ""), whether into a window, and the width and height the session
+		// offers the program (or 0 for those of the profile)
+		SD_BUS_METHOD("Launch", "asssbii", "", OnLaunch, SD_BUS_VTABLE_UNPRIVILEGED),
 		// Shows the main window of the application; does nothing in a
 		// service without one
 		SD_BUS_METHOD("ShowWindow", "", "", OnShowWindow, SD_BUS_VTABLE_UNPRIVILEGED),
@@ -141,6 +179,8 @@ struct ScalingServiceDBus {
 		// it, and whether it is scaled into a window
 		SD_BUS_PROPERTY("SourceWindow", "s", GetSourceWindow, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 		SD_BUS_PROPERTY("Windowed", "b", GetWindowed, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+		// What is scaled is a nested session; SourceWindow is "nested" then
+		SD_BUS_PROPERTY("Nested", "b", GetNested, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 		// The source is the active window
 		SD_BUS_PROPERTY("SourceActive", "b", GetSourceActive, 0, SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 		// Left, top, right and bottom in desktop coordinates: the part of the
@@ -156,6 +196,7 @@ ScalingService::ScalingService() noexcept : _taskFd(eventfd(0, EFD_NONBLOCK | EF
 
 ScalingService::~ScalingService() {
 	_EndSession();
+	_nested.reset();
 	if (_bus) {
 		sd_bus_flush_close_unref(_bus);
 	}
@@ -167,12 +208,16 @@ ScalingService::~ScalingService() {
 bool ScalingService::Initialize(Config config, std::string& error) noexcept {
 	_config = std::move(config);
 
-	_bridge = DesktopBridge::Create(error);
-	if (!_bridge) {
-		return false;
+	std::string bridgeError;
+	_bridge = DesktopBridge::Create(bridgeError);
+	if (_bridge) {
+		_hasDesktopBackEnd = true;
+		Logger::Get().Info(std::string("The desktop is ") + _bridge->Name());
+		ScalingSession::RecoverAfterCrash(*_bridge, Paths::StateDir() / "scaling-state");
+	} else {
+		// The service still runs, for nested sessions
+		Logger::Get().Warn(bridgeError + " Programs can be scaled in a nested session.");
 	}
-	Logger::Get().Info(std::string("The desktop is ") + _bridge->Name());
-	ScalingSession::RecoverAfterCrash(*_bridge, Paths::StateDir() / "scaling-state");
 
 	if (sd_bus_open_user(&_bus) < 0) {
 		error = "Cannot connect to the session bus.";
@@ -216,7 +261,7 @@ bool ScalingService::Initialize(Config config, std::string& error) noexcept {
 				trigger(ShortcutAction::TakeScreenshot)
 			}
 		};
-		if (_bridge->HasOwnShortcuts()) {
+		if (_bridge && _bridge->HasOwnShortcuts()) {
 			// The keys of the settings, bound while the service runs
 			std::vector<ShortcutRequest> requests;
 			for (const PortalShortcuts::Shortcut& shortcut : wanted) {
@@ -320,8 +365,17 @@ void ScalingService::ConfigureShortcuts() noexcept {
 void ScalingService::ListWindows(std::function<void(std::vector<Window> windows)> reply) noexcept {
 	_Post([this, reply = std::move(reply)] {
 		std::vector<Window> windows;
-		for (const WindowInfo& info : _bridge->ListWindows()) {
-			if (!_IsOwnOrForbidden(info)) {
+		if (_bridge) {
+			for (const WindowInfo& info : _bridge->ListWindows()) {
+				if (!_IsOwnOrForbidden(info)) {
+					windows.push_back(_Identify(info));
+				}
+			}
+		}
+		// The windows of a nested session too, so that a profile can be made
+		// for its program on a desktop that lists no windows
+		if (_nested) {
+			for (const WindowInfo& info : _nested->Bridge().ListWindows()) {
 				windows.push_back(_Identify(info));
 			}
 		}
@@ -396,6 +450,17 @@ void ScalingService::_EndSession() noexcept {
 }
 
 bool ScalingService::_StartScaling(const std::string& windowId, bool windowedMode) noexcept {
+	// What cannot be done leaves everything as it is
+	if (_nested) {
+		_Report("A window cannot be scaled while a nested session runs.");
+		return false;
+	}
+	if (!_bridge) {
+		_Report("This desktop has no back end for scaling windows that are open already. "
+			"A program can be scaled if it is started in a nested session.");
+		return false;
+	}
+
 	// Not _StopScaling: the state goes from what it is to "scaling" without
 	// "idle" in between
 	_EndSession();
@@ -464,14 +529,146 @@ bool ScalingService::_StartScaling(const std::string& windowId, bool windowedMod
 	return true;
 }
 
+void ScalingService::_Report(const std::string& message) noexcept {
+	Logger::Get().Error(message);
+	DesktopNotification::Show(_config.appId, "Magpie", message);
+}
+
+void ScalingService::LaunchNested(LaunchRequest request) noexcept {
+	_Post([this, request = std::move(request)] { _LaunchNested(request); });
+}
+
+void ScalingService::_LaunchNested(const LaunchRequest& request) noexcept {
+	if (request.command.empty()) {
+		return;
+	}
+	if (_nested) {
+		_Report("A nested session is running already.");
+		return;
+	}
+	const std::shared_ptr<const Settings> settings = _config.settings ? _config.settings() : nullptr;
+	if (!settings) {
+		_Report("The nested session did not start: the settings cannot be read.");
+		return;
+	}
+
+	// The scaling of a window ends for it
+	_StopScaling(true);
+
+	const Profile* profile = &settings->defaultProfile;
+	for (const Profile& candidate : settings->profiles) {
+		if (!request.profileName.empty() && candidate.name == request.profileName) {
+			profile = &candidate;
+		}
+	}
+	Size size = request.size;
+	if (size.width <= 0 || size.height <= 0) {
+		size = { (int32_t)profile->nestedWidth, (int32_t)profile->nestedHeight };
+	}
+
+	_nested = std::make_unique<NestedCompositor>();
+	std::string error;
+	if (!_nested->Start({ .size = size }, error)) {
+		_nested.reset();
+		_Report(error);
+		return;
+	}
+	_nestedProfileName = profile->name;
+	if (!_nested->Launch(request.command, request.workingDirectory)) {
+		_Report("The program could not be started in the nested session.");
+		_EndNested();
+		return;
+	}
+
+	_StartNestedSession(request.windowedMode);
+}
+
+// Shows the nested session, fullscreen or in a window. The session that
+// shows it now is ended first; the compositor and the program go on.
+bool ScalingService::_StartNestedSession(bool windowedMode) noexcept {
+	_EndSession();
+
+	const std::shared_ptr<const Settings> settings = _config.settings ? _config.settings() : nullptr;
+	if (!settings) {
+		_Report("The nested session ended: the settings cannot be read.");
+		_EndNested();
+		return false;
+	}
+	const Profile* profile = &settings->defaultProfile;
+	for (const Profile& candidate : settings->profiles) {
+		if (!_nestedProfileName.empty() && candidate.name == _nestedProfileName) {
+			profile = &candidate;
+		}
+	}
+
+	ScalingOptions options;
+	ScalingError error = BuildScalingOptions(*settings, *profile, windowedMode, options);
+	if (error == ScalingError::NoError) {
+		options.overlayOptions.scaleShortcut = _scaleShortcut;
+		options.overlayOptions.windowedModeScaleShortcut = _windowedScaleShortcut;
+		options.overlayOptions.takeScreenshotShortcut = _screenshotShortcut;
+
+		_session = std::make_unique<ScalingSession>();
+		error = _session->StartNested(*_nested, options, {
+			.effectsDir = _config.effectsDir,
+			.validation = _config.validation,
+			.appId = _config.appId,
+			.iconFontPath = _config.iconFontPath,
+			.showMessage = [appId = _config.appId](const std::string& text) {
+				DesktopNotification::Show(appId, "Magpie", text);
+			},
+			.lastWindowedWidth = _lastWindowedWidth
+		});
+	}
+	if (error != ScalingError::NoError) {
+		_session.reset();
+		_Report(std::string("The nested session ended: ") + ScalingErrorMessage(error) + ".");
+		_EndNested();
+		return false;
+	}
+
+	const bool wasScaling = _state == State::Scaling;
+	_windowId = "nested";
+	_windowPid = 0;
+	_isWindowedMode = windowedMode;
+	if (wasScaling) {
+		// From one way of showing it to the other
+		sd_bus_emit_properties_changed(_bus, _config.objectPath.c_str(), _config.appId.c_str(), "Windowed", nullptr);
+		if (_config.stateChanged) {
+			_config.stateChanged(State::Scaling, windowedMode);
+		}
+	}
+	_SetState(State::Scaling);
+	sd_bus_emit_properties_changed(_bus, _config.objectPath.c_str(), _config.appId.c_str(), "Nested", nullptr);
+	return true;
+}
+
+// Ends the nested session and, with its compositor, its program
+void ScalingService::_EndNested() noexcept {
+	_EndSession();
+	if (_nested) {
+		_nested->Stop();
+		_nested.reset();
+	}
+	_nestedProfileName.clear();
+	_windowId.clear();
+	_windowPid = 0;
+	_SetState(State::Idle);
+	sd_bus_emit_properties_changed(_bus, _config.objectPath.c_str(), _config.appId.c_str(), "Nested", nullptr);
+}
+
 void ScalingService::_StopScaling(bool byUser) noexcept {
+	if (_nested) {
+		_EndNested();
+		return;
+	}
 	_EndSession();
 
 	// A window whose scaling the user stopped is not scaled again at once
 	// by auto-scale; one that only lost the focus is, when it gets it back.
 	// As ScalingService::_ScalingRuntime_StateChanged on Windows, which
 	// tells the two apart by the foreground window.
-	if (_state != State::Idle && (byUser || _bridge->ActiveWindowId() == _windowId)) {
+	if (_state != State::Idle && (byUser || (_bridge && _bridge->ActiveWindowId() == _windowId))) {
 		_checkedWindow = _windowId;
 	}
 	_windowId.clear();
@@ -484,6 +681,15 @@ void ScalingService::_StopScaling(bool byUser) noexcept {
 void ScalingService::_OnSessionEnded() noexcept {
 	const ScalingSession::EndReason reason = _session->GetEndReason();
 	Logger::Get().Info("The scaling session ended (reason " + std::to_string((int)reason) + ")");
+	if (_nested) {
+		if (reason == ScalingSession::EndReason::ModeSwitchRequested) {
+			_StartNestedSession(!_isWindowedMode);
+		} else {
+			// The program has ended, or the user has closed its picture
+			_EndNested();
+		}
+		return;
+	}
 	if (reason == ScalingSession::EndReason::ModeSwitchRequested) {
 		// The button of the toolbar: the same window the other way
 		_StartScaling(std::string(_windowId), !_isWindowedMode);
@@ -509,7 +715,7 @@ void ScalingService::_CheckWaiting() noexcept {
 	static constexpr std::chrono::milliseconds SETTLE_TIME{ 200 };
 
 	WindowInfo info;
-	if (!_bridge->GetWindow(_windowId, info)) {
+	if (!_bridge || !_bridge->GetWindow(_windowId, info)) {
 		_StopScaling(false);
 		return;
 	}
@@ -524,6 +730,20 @@ void ScalingService::_CheckWaiting() noexcept {
 }
 
 void ScalingService::_Toggle(bool windowedMode) noexcept {
+	if (_nested) {
+		// A nested session cannot be left without ending its program, so
+		// the shortcuts only change the way it is shown: to the way of the
+		// shortcut, or to the other one if it is shown that way already
+		if (_session) {
+			_StartNestedSession(_session->IsWindowedMode() == windowedMode ? !windowedMode : windowedMode);
+		}
+		return;
+	}
+	if (!_bridge) {
+		_Report("This desktop has no back end for scaling windows that are open already. "
+			"A program can be scaled if it is started in a nested session.");
+		return;
+	}
 	if (_state == State::Scaling) {
 		if (_session->IsWindowedMode() == windowedMode || !_session->IsSourceActive()) {
 			_StopScaling(true);
@@ -546,6 +766,11 @@ void ScalingService::_Toggle(bool windowedMode) noexcept {
 }
 
 void ScalingService::_ScaleWindow(const std::string& query, bool windowedMode) noexcept {
+	if (!_bridge || _nested) {
+		// Says why not
+		_StartScaling(query, windowedMode);
+		return;
+	}
 	const std::vector<WindowInfo> windows = _bridge->ListWindows();
 	const std::vector<const WindowInfo*> found = FindWindows(windows, query);
 	if (found.size() == 1) {
@@ -559,6 +784,10 @@ void ScalingService::_ScaleWindow(const std::string& query, bool windowedMode) n
 // scaled. Port of ScalingService::_CheckForegroundTimer_Tick, which looks at
 // the foreground window every 50 ms; here the desktop reports the change.
 void ScalingService::_CheckForeground() noexcept {
+	// Auto-scale does not take the place of a nested session
+	if (!_bridge || _nested) {
+		return;
+	}
 	const std::string active = _bridge->ActiveWindowId();
 	if (active.empty() || active == _checkedWindow) {
 		return;
@@ -618,19 +847,29 @@ void ScalingService::Run() noexcept {
 
 	while (!_isQuitRequested) {
 		if (_session) {
-			const int wakeFds[3]{ busFd, _taskFd, _config.quitFd };
-			if (!_session->Step(std::span(wakeFds, _config.quitFd >= 0 ? 3 : 2))) {
+			// In a nested session the scaling session listens to the
+			// compositor of that session, and the desktop's shortcuts have
+			// to wake the loop themselves
+			SmallVector<int, 4> wakeFds{ busFd, _taskFd };
+			if (_config.quitFd >= 0) {
+				wakeFds.push_back(_config.quitFd);
+			}
+			if (_nested && _bridge) {
+				wakeFds.push_back(_bridge->EventFd());
+			}
+			if (!_session->Step(std::span<const int>(wakeFds.data(), wakeFds.size()))) {
 				_OnSessionEnded();
 			}
 		} else {
+			// A descriptor of -1 is not waited for
 			pollfd fds[4]{
 				{ busFd, POLLIN, 0 },
 				{ _taskFd, POLLIN, 0 },
-				{ _bridge->EventFd(), POLLIN, 0 },
-				{ _config.quitFd, POLLIN, 0 }
+				{ _config.quitFd, POLLIN, 0 },
+				{ _bridge ? _bridge->EventFd() : -1, POLLIN, 0 }
 			};
-			poll(fds, _config.quitFd >= 0 ? 4 : 3, _state == State::Waiting ? 20 : -1);
-			if (!_bridge->Dispatch()) {
+			poll(fds, 4, _state == State::Waiting ? 20 : -1);
+			if (_bridge && !_bridge->Dispatch()) {
 				Logger::Get().Error("The connection to the desktop is lost");
 				break;
 			}
@@ -649,8 +888,16 @@ void ScalingService::Run() noexcept {
 		for (const std::string& id : _shortcuts.TakeActivated()) {
 			_OnShortcut(id);
 		}
-		for (const std::string& id : _bridge->TakeActivatedShortcuts()) {
-			_OnShortcut(id);
+		if (_bridge) {
+			// While a nested session runs, nothing else makes the bridge
+			// look at what the desktop has sent
+			if (_nested && !_bridge->Dispatch()) {
+				Logger::Get().Error("The connection to the desktop is lost");
+				break;
+			}
+			for (const std::string& id : _bridge->TakeActivatedShortcuts()) {
+				_OnShortcut(id);
+			}
 		}
 		if (_shortcuts.TakeChanged()) {
 			_UpdateShortcuts();

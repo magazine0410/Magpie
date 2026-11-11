@@ -360,3 +360,38 @@ TEST_CASE("A relative launcher path from an old config becomes absolute", "[Sett
 	REQUIRE(settings.profiles.size() == 1);
 	CHECK(settings.profiles[0].launcherPath == "/opt/games/game/start.sh");
 }
+
+TEST_CASE("A profile keeps how its program is started in a nested session", "[settings]") {
+	// Only the Linux version writes and reads these fields
+	Settings settings;
+	REQUIRE(ReadSettingsJson(R"({ "profiles": [
+		{},
+		{ "name": "Game", "packaged": false, "pathRule": "/usr/bin/game", "classNameRule": "game",
+			"launchNested": true, "nestedWidth": 800, "nestedHeight": 600 },
+		{ "name": "Other", "packaged": false, "pathRule": "/usr/bin/other", "classNameRule": "other" },
+		{ "name": "Wrong", "packaged": false, "pathRule": "/usr/bin/wrong", "classNameRule": "wrong",
+			"launchNested": true, "nestedWidth": 4, "nestedHeight": 600 }
+	] })", settings));
+	REQUIRE(settings.profiles.size() == 3);
+	CHECK(settings.profiles[0].isLaunchedNested);
+	CHECK(settings.profiles[0].nestedWidth == 800);
+	CHECK(settings.profiles[0].nestedHeight == 600);
+	// Without them: as on Windows, and a size for when the user turns it on
+	CHECK_FALSE(settings.profiles[1].isLaunchedNested);
+	CHECK(settings.profiles[1].nestedWidth == 1280);
+	CHECK(settings.profiles[1].nestedHeight == 720);
+	// A size that no session can have gives way to that default
+	CHECK(settings.profiles[2].isLaunchedNested);
+	CHECK(settings.profiles[2].nestedWidth == 1280);
+	CHECK(settings.profiles[2].nestedHeight == 720);
+
+	Settings again;
+	REQUIRE(ReadSettingsJson(WriteSettingsJson(settings), again));
+	CHECK(again.profiles == settings.profiles);
+
+	// A profile that copies another takes them along
+	Profile copy;
+	copy.Copy(settings.profiles[0]);
+	CHECK(copy.isLaunchedNested);
+	CHECK(copy.nestedWidth == 800);
+}

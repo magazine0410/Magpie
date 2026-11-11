@@ -1,4 +1,5 @@
 #include "RootViewModel.h"
+#include <QFileInfo>
 #include <algorithm>
 #include <QCollator>
 #include <QDesktopServices>
@@ -71,9 +72,30 @@ void RootViewModel::moveProfile(int profile, bool up) {
 	Q_EMIT profileMoved(profile, target);
 }
 
+void RootViewModel::Launch(const Profile& profile, ScalingController& scaling) {
+	if (!profile.isLaunchedNested && scaling.HasDesktopBackEnd()) {
+		ProfileActions::Launch(profile);
+		return;
+	}
+
+	const QStringList command = ProfileActions::LaunchCommand(profile);
+	if (command.isEmpty()) {
+		return;
+	}
+	ScalingService::LaunchRequest request;
+	for (const QString& argument : command) {
+		request.command.push_back(argument.toStdString());
+	}
+	request.workingDirectory = QFileInfo(command[0]).path().toStdString();
+	request.profileName = profile.name;
+	// The way the profile scales by itself, fullscreen if it does not
+	request.windowedMode = profile.autoScale == AutoScale::Windowed;
+	scaling.LaunchNested(std::move(request));
+}
+
 void RootViewModel::launch(int profile) {
 	if (_IsValid(profile)) {
-		ProfileActions::Launch(_settings.Data().profiles[(size_t)profile]);
+		Launch(_settings.Data().profiles[(size_t)profile], _scaling);
 	}
 }
 

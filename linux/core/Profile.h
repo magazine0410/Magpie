@@ -62,6 +62,9 @@ struct Profile {
 		multiMonitorUsage = other.multiMonitorUsage;
 		cursorInterpolationMode = other.cursorInterpolationMode;
 		launchParameters = other.launchParameters;
+		isLaunchedNested = other.isLaunchedNested;
+		nestedWidth = other.nestedWidth;
+		nestedHeight = other.nestedHeight;
 		outputAlignment = other.outputAlignment;
 		scalingFlags = other.scalingFlags;
 
@@ -85,6 +88,13 @@ struct Profile {
 	std::string classNameRule;
 
 	std::filesystem::path launcherPath;
+	// Only on Linux: the Launch action starts the program in a nested
+	// session, a compositor of Magpie's own, and scales it from there; and
+	// the size that session offers the program, which is the size the
+	// picture is scaled from
+	bool isLaunchedNested = false;
+	uint32_t nestedWidth = 1280;
+	uint32_t nestedHeight = 720;
 
 	AutoScale autoScale = AutoScale::Disabled;
 
